@@ -1,0 +1,18 @@
+# Local IDE and SDK settings
+.gradle/
+.kotlin/
+.idea/
+*.iml
+local.properties
+**/build/
+.externalNativeBuild/
+.cxx/
+captures/
+# Private signing material
+*.jks
+*.keystore
+keystore.properties
+.env
+.env.*
+.DS_Store
+Thumbs.db
