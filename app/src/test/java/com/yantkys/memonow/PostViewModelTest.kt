@@ -150,6 +150,54 @@ class PostViewModelTest {
         assertEquals(FeedState.Ready(emptyList()), model.feed.value)
     }
 
+    @Test fun slowMetadataDoesNotBlockSavingOrTheNextPost() = runTest {
+        val waiting = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val started = kotlinx.coroutines.CompletableDeferred<String>()
+        val fast = PostViewModel(PostRepository(dao), SavedStateHandle()) { id ->
+            started.complete(id)
+            waiting.await()
+        }
+        store.put("metadata", fast)
+        fast.updateDraft("即座に保存")
+        fast.send()
+        runCurrent()
+        assertTrue(started.isCompleted)
+        assertEquals("", fast.draft.value)
+        assertFalse(fast.busy.value)
+        fast.updateDraft("次の投稿も保存")
+        fast.send()
+        runCurrent()
+        assertEquals(2, dao.rows.value.size)
+        fast.cancelMetadata()
+        runCurrent()
+        assertNull(fast.error.value)
+    }
+
+    @Test fun failedBodySaveNeverStartsMetadata() = runTest {
+        var calls = 0
+        val fast = PostViewModel(PostRepository(dao), SavedStateHandle()) { calls++ }
+        store.put("metadata", fast)
+        dao.failWrites = true
+        fast.updateDraft("本文")
+        fast.send()
+        runCurrent()
+        assertEquals(0, calls)
+        assertEquals("本文", fast.draft.value)
+    }
+
+    @Test fun offAtSubmissionDoesNotEnrichEvenIfEnabledBeforeSaveCompletes() = runTest {
+        var enabled = false
+        var calls = 0
+        val fast = PostViewModel(PostRepository(dao), SavedStateHandle(), { enabled }) { calls++ }
+        store.put("metadata", fast)
+        fast.updateDraft("OFF時の記録")
+        fast.send()
+        enabled = true
+        runCurrent()
+        assertEquals(0, calls)
+        assertEquals(1, dao.rows.value.size)
+    }
+
     private class TestDao : PostDao {
         val rows = MutableStateFlow<List<Post>>(emptyList())
         var failWrites = false
@@ -158,6 +206,9 @@ class PostViewModelTest {
             if (failReads) throw IOException("read failure")
             rows.collect { emit(it) }
         }
+        override suspend fun find(id: String) = rows.value.firstOrNull { it.id == id }
+        override suspend fun attachPlace(id: String, name: String): Int = error("unused")
+        override suspend fun attachWeather(id: String, code: Int?, temperature: Double?, at: Long): Int = error("unused")
         override suspend fun insert(post: Post) {
             if (failWrites) throw IOException("disk full")
             rows.value += post

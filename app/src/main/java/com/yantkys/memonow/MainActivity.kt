@@ -37,7 +37,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.compose.ui.platform.LocalContext
+import com.yantkys.memonow.metadata.weatherLabel
 import com.yantkys.memonow.data.Post
 import java.time.Instant
 import java.time.ZoneId
@@ -45,12 +47,23 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 class MainActivity : ComponentActivity() {
+    private val model by lazy { ViewModelProvider(this, PostViewModel.Factory)[PostViewModel::class.java] }
+    override fun onStart() {
+        super.onStart()
+        val app = application as MemonowApplication
+        app.screenStarted()
+        if (!app.locationSource.hasPermission()) app.metadataSettings.setEnabled(false)
+    }
+    override fun onStop() {
+        if ((application as MemonowApplication).screenStopped()) model.cancelMetadata()
+        super.onStop()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                MemonowScreen(viewModel(factory = PostViewModel.Factory))
+                MemonowScreen(model)
             }
         }
     }
@@ -59,6 +72,8 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MemonowScreen(model: PostViewModel) {
+    val app = LocalContext.current.applicationContext as MemonowApplication
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     val feed by model.feed.collectAsStateWithLifecycle()
     val draft by model.draft.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
@@ -88,7 +103,11 @@ private fun MemonowScreen(model: PostViewModel) {
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("memonow") }) },
+        topBar = {
+            TopAppBar(title = { Text("memonow") }, actions = {
+                TextButton(onClick = { showSettings = true }) { Text("位置・天気設定") }
+            })
+        },
         bottomBar = {
             Surface(tonalElevation = 3.dp) {
                 Row(
@@ -137,6 +156,9 @@ private fun MemonowScreen(model: PostViewModel) {
         }
     }
 
+    if (showSettings) {
+        MetadataSettingsDialog(app, onDisable = model::cancelMetadata, onDismiss = { showSettings = false })
+    }
     if (editingId != null) {
         AlertDialog(
             onDismissRequest = model::cancelEditing,
@@ -187,6 +209,15 @@ private fun PostRow(post: Post, busy: Boolean, onEdit: () -> Unit, onDelete: () 
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        val attributes = listOfNotNull(
+            post.placeName?.let { "📍$it" },
+            weatherLabel(post.weatherCode),
+            post.temperatureC?.let { String.format(java.util.Locale.getDefault(), "%.1f°C", it) },
+        )
+        if (attributes.isNotEmpty()) {
+            Text(attributes.joinToString(" · "), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Row {
             TextButton(onClick = onEdit, enabled = !busy) { Text("編集") }
             TextButton(onClick = onDelete, enabled = !busy) { Text("削除") }
