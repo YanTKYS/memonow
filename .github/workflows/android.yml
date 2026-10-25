@@ -24,7 +24,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Install pinned SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
       - name: Set up Gradle and validate Wrapper
         uses: gradle/actions/setup-gradle@v4
       - name: Build and lint debug app
