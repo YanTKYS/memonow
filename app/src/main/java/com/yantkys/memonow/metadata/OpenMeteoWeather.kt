@@ -15,7 +15,12 @@ class OpenMeteoWeather(
     override suspend fun current(point: CoarsePoint): Weather? {
         val url = "https://api.open-meteo.com/v1/forecast?latitude=${point.latitude}&longitude=${point.longitude}" +
             "&current=temperature_2m,weather_code&temperature_unit=celsius&timeformat=unixtime&timezone=GMT"
-        return parse(fetch(url))
+        val body = fetch(url)
+        return try {
+            parse(body) ?: throw MetadataFailure(MetadataProblem.WEATHER_INVALID)
+        } catch (_: org.json.JSONException) {
+            throw MetadataFailure(MetadataProblem.WEATHER_INVALID)
+        }
     }
 
     companion object {
@@ -43,7 +48,7 @@ class OpenMeteoWeather(
                 connection.readTimeout = 3_000
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("Accept", "application/json")
-                check(connection.responseCode == 200) { "Weather unavailable" }
+                if (connection.responseCode != 200) throw MetadataFailure(MetadataProblem.WEATHER_HTTP)
                 connection.inputStream.use { input ->
                     val output = ByteArrayOutputStream()
                     val buffer = ByteArray(4096)
@@ -51,7 +56,7 @@ class OpenMeteoWeather(
                         currentCoroutineContext().ensureActive()
                         val count = input.read(buffer)
                         if (count < 0) break
-                        check(output.size() + count <= 32_768) { "Weather response too large" }
+                        if (output.size() + count > 32_768) throw MetadataFailure(MetadataProblem.WEATHER_INVALID)
                         output.write(buffer, 0, count)
                     }
                     output.toString("UTF-8")

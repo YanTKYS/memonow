@@ -2,6 +2,7 @@ package com.yantkys.memonow.metadata
 
 import android.content.Context
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import android.location.Address
 import android.location.Geocoder
 import java.util.Locale
@@ -15,15 +16,17 @@ class AndroidPlaceSource(context: Context) : PlaceSource {
 
     @Suppress("DEPRECATION")
     override suspend fun name(point: CoarsePoint): String? {
-        if (!Geocoder.isPresent()) return null
+        if (!Geocoder.isPresent()) throw MetadataFailure(MetadataProblem.GEOCODER_UNSUPPORTED)
         // Legacy Geocoder may block in a system service. Limit workers and queued work;
         // cancellation releases the coroutine even if an OEM's Binder call ignores interruption.
         return suspendCancellableCoroutine { continuation ->
             val future = worker.submit {
-                val name = try {
-                    municipality(geocoder.getFromLocation(point.latitude, point.longitude, 1)?.firstOrNull())
-                } catch (_: Exception) { null }
-                if (continuation.isActive) continuation.resume(name)
+                try {
+                    val name = municipality(geocoder.getFromLocation(point.latitude, point.longitude, 1)?.firstOrNull())
+                    if (continuation.isActive) continuation.resume(name)
+                } catch (_: Exception) {
+                    if (continuation.isActive) continuation.resumeWithException(MetadataFailure(MetadataProblem.PLACE_FAILED))
+                }
             }
             continuation.invokeOnCancellation {
                 future.cancel(true)

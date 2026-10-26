@@ -39,7 +39,7 @@ class MetadataTest {
     private var permitted = true
     private var locationCalls = 0
     private var weatherCalls = 0
-    private val fix = LocationFix(26.123456, 127.678912, 1000)
+    private val fix = LocationFix(26.123456, 127.678912, 1000, 500f)
     private var locate: suspend () -> LocationFix? = { fix }
     private var place: suspend (CoarsePoint) -> String? = { "沖縄県 糸満市" }
     private var weather: suspend (CoarsePoint) -> Weather? = { Weather(0, 25.5, now) }
@@ -160,8 +160,141 @@ class MetadataTest {
         assertEquals(0, locationCalls)
     }
 
+    @Test fun diagnosticsDescribeSuccessAndIndependentPartialSuccess() = runTest {
+        val service = enricher()
+        service.enrich(repository.create("both"))
+        assertEquals("地名・天気を付与しました", service.diagnostic.value.message)
+        assertTrue(service.diagnostic.value.placeSaved)
+        assertTrue(service.diagnostic.value.weatherSaved)
+        for (reason in listOf(MetadataProblem.GEOCODER_UNSUPPORTED, MetadataProblem.PLACE_FAILED)) {
+            place = { throw MetadataFailure(reason) }
+            service.enrich(repository.create("weather only"))
+            assertEquals(reason, service.diagnostic.value.placeProblem)
+            assertTrue(service.diagnostic.value.weatherSaved)
+            assertFalse(service.diagnostic.value.placeSaved)
+        }
+        place = { null }
+        service.enrich(repository.create("empty geocoder"))
+        assertEquals(MetadataProblem.PLACE_EMPTY, service.diagnostic.value.placeProblem)
+        assertTrue(service.diagnostic.value.weatherSaved)
+        place = { "市" }
+        weather = { throw IOException("private server details") }
+        service.enrich(repository.create("place only"))
+        assertEquals(MetadataProblem.WEATHER_NETWORK, service.diagnostic.value.weatherProblem)
+        assertTrue(service.diagnostic.value.placeSaved)
+        assertFalse(service.diagnostic.value.weatherSaved)
+        assertFalse(service.diagnostic.value.message.contains("private"))
+    }
+
+    @Test fun diagnosticsDistinguishPositionFailuresWithoutCallingExternalServices() = runTest {
+        val service = enricher()
+        for (reason in listOf(MetadataProblem.PERMISSION, MetadataProblem.LOCATION_OFF, MetadataProblem.PROVIDER)) {
+            locate = { throw MetadataFailure(reason) }
+            service.enrich(repository.create("body"))
+            assertEquals(reason, service.diagnostic.value.problem)
+            assertEquals(MetadataStage.STOPPED, service.diagnostic.value.stage)
+        }
+        locate = { delay(60_000); fix }
+        service.enrich(repository.create("timeout"))
+        assertEquals(MetadataProblem.LOCATION_TIMEOUT, service.diagnostic.value.problem)
+        locate = { fix.copy(ageMillis = 120_001) }
+        service.enrich(repository.create("old"))
+        assertEquals(MetadataProblem.LOCATION_STALE, service.diagnostic.value.problem)
+        locate = { fix.copy(accuracyMeters = 10_001f) }
+        service.enrich(repository.create("inaccurate"))
+        assertEquals(MetadataProblem.LOCATION_ACCURACY, service.diagnostic.value.problem)
+        assertEquals(0, weatherCalls)
+        permitted = false
+        service.enrich(repository.create("off"))
+        assertEquals(MetadataProblem.OFF, service.diagnostic.value.problem)
+    }
+
+    @Test fun diagnosticsDistinguishWeatherErrorsTimeoutAndTimeMismatch() = runTest {
+        val service = enricher()
+        for (reason in listOf(MetadataProblem.WEATHER_HTTP, MetadataProblem.WEATHER_INVALID)) {
+            weather = { throw MetadataFailure(reason) }
+            service.enrich(repository.create("body"))
+            assertEquals(reason, service.diagnostic.value.weatherProblem)
+            assertTrue(service.diagnostic.value.placeSaved)
+        }
+        weather = { delay(60_000); Weather(0, 20.0, now) }
+        service.enrich(repository.create("timeout"))
+        assertEquals(MetadataProblem.WEATHER_TIMEOUT, service.diagnostic.value.weatherProblem)
+        weather = { Weather(0, 20.0, now + 21 * 60_000) }
+        service.enrich(repository.create("time mismatch"))
+        assertEquals(MetadataProblem.WEATHER_TIME, service.diagnostic.value.weatherProblem)
+        place = { delay(30_000); "late" }
+        weather = { Weather(0, 20.0, now) }
+        service.enrich(repository.create("place timeout"))
+        assertEquals(MetadataProblem.PLACE_TIMEOUT, service.diagnostic.value.placeProblem)
+        assertTrue(service.diagnostic.value.weatherSaved)
+    }
+
+    @Test fun progressMatchesStagesAndOlderCompletionCannotReplaceLatestResult() = runBlocking {
+        val service = enricher()
+        val first = repository.create("first")
+        val second = repository.create("second")
+        val started = CompletableDeferred<Unit>()
+        val resume = CompletableDeferred<Unit>()
+        locate = {
+            assertEquals(MetadataStage.LOCATION, service.diagnostic.value.stage)
+            fix
+        }
+        var call = 0
+        place = {
+            assertEquals(MetadataStage.PLACE, service.diagnostic.value.stage)
+            if (++call == 1) { started.complete(Unit); resume.await(); "市" } else null
+        }
+        weather = { Weather(0, 25.5, now) }
+        val oldJob = launch { service.enrich(first) }
+        started.await()
+        service.enrich(second)
+        val latest = service.diagnostic.value
+        assertEquals(MetadataProblem.PLACE_EMPTY, latest.placeProblem)
+        resume.complete(Unit)
+        oldJob.join()
+        assertEquals(latest, service.diagnostic.value)
+        assertEquals("市", repository.find(first)!!.placeName)
+    }
+
+    @Test fun cancellationAndScreenExitReplaceSuccessAndFencePendingResults() = runBlocking {
+        val service = enricher()
+        service.enrich(repository.create("success"))
+        service.interrupt(MetadataProblem.BACKGROUND)
+        assertEquals(MetadataStage.STOPPED, service.diagnostic.value.stage)
+        assertFalse(service.diagnostic.value.message.contains("付与しました"))
+        val started = CompletableDeferred<Unit>()
+        val id = repository.create("cancel")
+        place = { started.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+        val job = launch { service.enrich(id) }
+        started.await()
+        service.interrupt(MetadataProblem.OFF)
+        job.cancel(); job.join()
+        assertEquals(MetadataProblem.OFF, service.diagnostic.value.problem)
+        assertEquals(MetadataStage.PLACE, service.diagnostic.value.stoppedAt)
+        assertNull(repository.find(id)!!.placeName)
+        assertNull(repository.find(id)!!.weatherAt)
+        assertEquals(1, weatherCalls)
+    }
+
+    @Test fun weatherStageAndDeletedPostNeverClaimSuccessfulSave() = runBlocking {
+        val service = enricher()
+        val id = repository.create("delete while fetching")
+        weather = {
+            assertEquals(MetadataStage.WEATHER, service.diagnostic.value.stage)
+            repository.delete(id)
+            Weather(0, 20.0, now)
+        }
+        service.enrich(id)
+        assertEquals(MetadataProblem.POST_CHANGED, service.diagnostic.value.problem)
+        assertFalse(service.diagnostic.value.weatherSaved)
+    }
+
     @Test fun platformPermissionAndMunicipalityOnlyExtraction() = runTest {
-        assertNull(AndroidLocationSource(context).locate())
+        try {
+            AndroidLocationSource(context).locate()
+            fail("permission should be required")
+        } catch (failure: MetadataFailure) { assertEquals(MetadataProblem.PERMISSION, failure.problem) }
         val address = Address(Locale.JAPAN).apply {
             adminArea = "沖縄県"
             locality = "糸満市"

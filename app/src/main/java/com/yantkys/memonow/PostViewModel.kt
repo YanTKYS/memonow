@@ -30,6 +30,7 @@ class PostViewModel(
     private val backupStore: BackupStore? = null,
     private val backupFiles: BackupFiles? = null,
     private val pauseMetadata: (Boolean) -> Unit = {},
+    private val onMetadataCancelled: () -> Unit = {},
     private val enrich: suspend (String) -> Unit = {},
 ) : ViewModel() {
     val draft = savedState.getStateFlow("draft", "")
@@ -56,6 +57,7 @@ class PostViewModel(
     private val metadataJobs = mutableSetOf<Job>()
 
     fun cancelMetadata() {
+        onMetadataCancelled()
         metadataJobs.toList().forEach { it.cancel() }
         metadataJobs.clear()
     }
@@ -230,7 +232,8 @@ class PostViewModel(
                 val app = this[APPLICATION_KEY] as MemonowApplication
                 PostViewModel(app.repository, createSavedStateHandle(), canEnrich = app::metadataAllowed,
                     backupStore = app.backupStore, backupFiles = AndroidBackupFiles(app.contentResolver),
-                    pauseMetadata = { app.restoring = it }, enrich = app.postMetadata::enrich)
+                    pauseMetadata = { app.restoring = it }, enrich = app.postMetadata::enrich,
+                    onMetadataCancelled = { app.postMetadata.interrupt(app.metadataBlockedReason()) })
             }
         }
     }

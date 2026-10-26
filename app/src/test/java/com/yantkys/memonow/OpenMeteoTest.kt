@@ -19,10 +19,20 @@ class OpenMeteoTest {
             assertEquals("https://api.open-meteo.com/v1/forecast?latitude=26.12&longitude=127.68&current=temperature_2m,weather_code&temperature_unit=celsius&timeformat=unixtime&timezone=GMT", url)
             response
         }
-        val weather = source.current(CoarsePoint.from(LocationFix(26.123456, 127.678912, 0))!!)!!
+        val weather = source.current(CoarsePoint.from(LocationFix(26.123456, 127.678912, 0, 500f))!!)!!
         assertEquals(3, weather.code)
         assertEquals(25.5, weather.temperatureC!!, 0.0)
         assertEquals(1792976400000, weather.at)
+    }
+
+    @Test fun malformedResponsesAndConnectionFailuresHaveSafeDistinctDiagnostics() = runTest {
+        val point = CoarsePoint.from(LocationFix(26.12, 127.68, 0, 500f))!!
+        for (body in listOf("not json", "{}", response.replace("°C", "°F").replace("wmo code", "invalid"))) {
+            val failure = runCatching { OpenMeteoWeather { body }.current(point) }.exceptionOrNull() as MetadataFailure
+            assertEquals(MetadataProblem.WEATHER_INVALID, failure.problem)
+        }
+        val failure = runCatching { OpenMeteoWeather { throw java.io.IOException("private URL") }.current(point) }.exceptionOrNull()
+        assertTrue(failure is java.io.IOException)
     }
 
     @Test fun missingValuesUnknownCodesAndInvalidUnitsAreNotInvented() {
