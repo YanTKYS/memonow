@@ -14,4 +14,8 @@ data class Post(
     val id: String,
     val body: String,
     val createdAt: Long, // UTC epoch milliseconds; formatted in the device timezone.
+    val placeName: String? = null,
+    val weatherCode: Int? = null,
+    val temperatureC: Double? = null,
+    val weatherAt: Long? = null,
 )

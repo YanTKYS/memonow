@@ -12,6 +12,11 @@ class PostRepository(private val dao: PostDao, private val clock: Clock = Clock.
         return id
     }
 
+    suspend fun find(id: String) = dao.find(id)
+    suspend fun attachPlace(id: String, name: String) = dao.attachPlace(id, name)
+    suspend fun attachWeather(id: String, code: Int?, temperature: Double?, at: Long) =
+        dao.attachWeather(id, code, temperature, at)
+
     suspend fun edit(id: String, body: String) {
         check(dao.updateBody(id, validBody(body)) == 1) { "Post no longer exists" }
     }

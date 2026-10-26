@@ -10,6 +10,15 @@ interface PostDao {
     @Query("SELECT * FROM posts ORDER BY createdAt ASC, sequence ASC")
     fun observeAll(): Flow<List<Post>>
 
+    @Query("SELECT * FROM posts WHERE id = :id")
+    suspend fun find(id: String): Post?
+
+    @Query("UPDATE posts SET placeName = :name WHERE id = :id")
+    suspend fun attachPlace(id: String, name: String): Int
+
+    @Query("UPDATE posts SET weatherCode = :code, temperatureC = :temperature, weatherAt = :at WHERE id = :id")
+    suspend fun attachWeather(id: String, code: Int?, temperature: Double?, at: Long): Int
+
     @Insert
     suspend fun insert(post: Post)
 

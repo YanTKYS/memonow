@@ -24,6 +24,8 @@ sealed interface FeedState {
 class PostViewModel(
     private val repository: PostRepository,
     private val savedState: SavedStateHandle,
+    private val canEnrich: () -> Boolean = { true },
+    private val enrich: suspend (String) -> Unit = {},
 ) : ViewModel() {
     val draft = savedState.getStateFlow("draft", "")
     val editingId = savedState.getStateFlow<String?>("editingId", null)
@@ -38,6 +40,12 @@ class PostViewModel(
     private val _sentId = MutableStateFlow<String?>(null)
     val sentId = _sentId.asStateFlow()
     private var loadJob: Job? = null
+    private val metadataJobs = mutableSetOf<Job>()
+
+    fun cancelMetadata() {
+        metadataJobs.toList().forEach { it.cancel() }
+        metadataJobs.clear()
+    }
 
     init { retryLoading() }
 
@@ -70,10 +78,20 @@ class PostViewModel(
     fun send() {
         val body = draft.value
         if (body.isBlank() || _busy.value) return
+        val includeMetadata = canEnrich()
         write("保存できませんでした。本文は残っています。もう一度お試しください。") {
             val id = repository.create(body)
             if (draft.value == body) updateDraft("")
             _sentId.value = id
+            if (!includeMetadata) return@write
+            // Launch a sibling job; successful body persistence never waits for metadata.
+            val job = viewModelScope.launch {
+                try { enrich(id) } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) { /* Missing metadata is a valid post. */ }
+            }
+            metadataJobs.add(job)
+            job.invokeOnCompletion { metadataJobs.remove(job) }
         }
     }
 
@@ -115,7 +133,8 @@ class PostViewModel(
     companion object {
         val Factory = viewModelFactory {
             initializer {
-                PostViewModel((this[APPLICATION_KEY] as MemonowApplication).repository, createSavedStateHandle())
+                val app = this[APPLICATION_KEY] as MemonowApplication
+                PostViewModel(app.repository, createSavedStateHandle(), app::metadataAllowed, app.postMetadata::enrich)
             }
         }
     }
