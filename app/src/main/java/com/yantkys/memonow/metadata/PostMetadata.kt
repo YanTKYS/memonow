@@ -40,6 +40,7 @@ class PostMetadata(
         // Best effort only. Never queue old posts for a later "current" weather lookup.
         if (!allowed() || !slots.tryAcquire()) return
         try {
+            val token = repository.metadataToken()
             val post = repository.find(id) ?: return
             fun active() = allowed() && clock.millis() - post.createdAt in 0..120_000
             if (!active()) return
@@ -48,14 +49,14 @@ class PostMetadata(
             if (!active()) return
             val name = optional { withTimeout(3_000) { place.name(point) } }
             if (!active()) return
-            if (!name.isNullOrBlank()) repository.attachPlace(id, name)
+            if (!name.isNullOrBlank()) repository.attachPlace(id, name, token)
             if (repository.find(id) == null || !active()) return
             val result = optional { withTimeout(6_000) { weather.current(point) } } ?: return
             // Open-Meteo current estimates use 15-minute steps; reject distant/future estimates.
             if (active() && abs(result.at.toDouble() - post.createdAt) <= 20 * 60_000 &&
                 (result.code != null || result.temperatureC != null)
             ) {
-                repository.attachWeather(id, result.code, result.temperatureC, result.at)
+                repository.attachWeather(id, result.code, result.temperatureC, result.at, token)
             }
         } finally {
             slots.release()

@@ -1,5 +1,7 @@
 package com.yantkys.memonow
 
+import android.net.Uri
+import com.yantkys.memonow.backup.*
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -25,6 +27,9 @@ class PostViewModel(
     private val repository: PostRepository,
     private val savedState: SavedStateHandle,
     private val canEnrich: () -> Boolean = { true },
+    private val backupStore: BackupStore? = null,
+    private val backupFiles: BackupFiles? = null,
+    private val pauseMetadata: (Boolean) -> Unit = {},
     private val enrich: suspend (String) -> Unit = {},
 ) : ViewModel() {
     val draft = savedState.getStateFlow("draft", "")
@@ -35,6 +40,14 @@ class PostViewModel(
     val feed = _feed.asStateFlow()
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
+    private val _backupState = MutableStateFlow<BackupState>(when (savedState.get<String>("backupStage")) {
+        "export-picker" -> BackupState.Picking(true)
+        "import-picker" -> BackupState.Picking(false)
+        null -> BackupState.Idle
+        else -> BackupState.Finished("前回の処理は中断されました。ファイルを選び直して確認してください。", false)
+    })
+    val backupState = _backupState.asStateFlow()
+    private fun blocked() = _busy.value || _backupState.value != BackupState.Idle
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
     private val _sentId = MutableStateFlow<String?>(null)
@@ -47,16 +60,20 @@ class PostViewModel(
         metadataJobs.clear()
     }
 
-    init { retryLoading() }
+    init {
+        if (_backupState.value == BackupState.Picking(false)) pauseMetadata(true)
+        retryLoading()
+    }
 
     fun updateDraft(body: String) { savedState["draft"] = body }
     fun startEditing(post: Post) {
+        if (blocked()) return
         savedState["editDraft"] = post.body
         savedState["editingId"] = post.id
     }
     fun updateEditDraft(body: String) { savedState["editDraft"] = body }
     fun cancelEditing() { if (!_busy.value) savedState["editingId"] = null }
-    fun requestDelete(id: String) { savedState["deletingId"] = id }
+    fun requestDelete(id: String) { if (!blocked()) savedState["deletingId"] = id }
     fun cancelDeleting() { if (!_busy.value) savedState["deletingId"] = null }
     fun clearError() { _error.value = null }
     fun consumeSentId(id: String) { if (_sentId.value == id) _sentId.value = null }
@@ -77,7 +94,7 @@ class PostViewModel(
 
     fun send() {
         val body = draft.value
-        if (body.isBlank() || _busy.value) return
+        if (body.isBlank() || blocked()) return
         val includeMetadata = canEnrich()
         write("保存できませんでした。本文は残っています。もう一度お試しください。") {
             val id = repository.create(body)
@@ -98,7 +115,7 @@ class PostViewModel(
     fun edit() {
         val id = editingId.value ?: return
         val body = editDraft.value
-        if (body.isBlank() || _busy.value) return
+        if (body.isBlank() || blocked()) return
         write("編集を保存できませんでした。本文を確認して、もう一度お試しください。") {
             repository.edit(id, body)
             savedState["editingId"] = null
@@ -107,10 +124,82 @@ class PostViewModel(
 
     fun delete() {
         val id = deletingId.value ?: return
-        if (_busy.value) return
+        if (blocked()) return
         write("削除できませんでした。もう一度お試しください。") {
             repository.delete(id)
             savedState["deletingId"] = null
+        }
+    }
+
+    fun beginBackup(export: Boolean): Boolean {
+        if (blocked()) return false
+        _backupState.value = BackupState.Picking(export)
+        savedState["backupStage"] = if (export) "export-picker" else "import-picker"
+        if (!export) { pauseMetadata(true); cancelMetadata() }
+        return true
+    }
+
+    fun exportTo(uri: Uri?) {
+        if (_backupState.value != BackupState.Picking(true)) return
+        if (uri == null) { finishBackup("保存をキャンセルしました。", false); return }
+        backupOperation("JSONを保存しています…", "export-write") {
+            val (count, bytes) = checkNotNull(backupStore).export()
+            checkNotNull(backupFiles).write(uri, bytes)
+            finishBackup("${count}件をJSONに保存しました。", true)
+        }
+    }
+
+    fun importFrom(uri: Uri?) {
+        if (_backupState.value != BackupState.Picking(false)) return
+        if (uri == null) { finishBackup("復元をキャンセルしました。記録は変更していません。", false); return }
+        backupOperation("JSON全体を読み取り・検証しています…", "import-read") {
+            val document = checkNotNull(backupFiles).read(uri)
+            val plan = checkNotNull(backupStore).prepare(document)
+            savedState["backupStage"] = "confirm"
+            _backupState.value = BackupState.Confirm(plan)
+        }
+    }
+
+    fun confirmRestore() {
+        val plan = (_backupState.value as? BackupState.Confirm)?.plan ?: return
+        cancelMetadata()
+        backupOperation("記録を置き換えています…", "replace") {
+            checkNotNull(backupStore).restore(plan)
+            savedState["editingId"] = null
+            savedState["deletingId"] = null
+            retryLoading()
+            _sentId.value = plan.document.posts.maxWithOrNull(compareBy<com.yantkys.memonow.data.Post> { it.createdAt }.thenBy { it.sequence })?.id
+            finishBackup("${plan.document.posts.size}件を復元しました。", true)
+        }
+    }
+
+    fun dismissBackup() {
+        if (_backupState.value is BackupState.Processing) return
+        savedState["backupStage"] = null
+        _backupState.value = BackupState.Idle
+        pauseMetadata(false)
+    }
+
+    private fun finishBackup(message: String, success: Boolean) {
+        savedState["backupStage"] = null
+        pauseMetadata(false)
+        _backupState.value = BackupState.Finished(message, success)
+    }
+
+    private fun backupOperation(label: String, stage: String, action: suspend () -> Unit) {
+        _backupState.value = BackupState.Processing(label)
+        savedState["backupStage"] = stage
+        viewModelScope.launch {
+            try {
+                action()
+            } catch (cancelled: CancellationException) {
+                pauseMetadata(false)
+                throw cancelled
+            } catch (invalid: InvalidBackup) {
+                finishBackup(invalid.message ?: "バックアップが正しくありません。", false)
+            } catch (_: Exception) {
+                finishBackup("処理に失敗しました。保存先・空き容量・ファイル内容を確認してください。失敗した保存ファイルは使用しないでください。", false)
+            }
         }
     }
 
@@ -130,11 +219,18 @@ class PostViewModel(
         }
     }
 
+    override fun onCleared() {
+        pauseMetadata(false)
+        super.onCleared()
+    }
+
     companion object {
         val Factory = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as MemonowApplication
-                PostViewModel(app.repository, createSavedStateHandle(), app::metadataAllowed, app.postMetadata::enrich)
+                PostViewModel(app.repository, createSavedStateHandle(), canEnrich = app::metadataAllowed,
+                    backupStore = app.backupStore, backupFiles = AndroidBackupFiles(app.contentResolver),
+                    pauseMetadata = { app.restoring = it }, enrich = app.postMetadata::enrich)
             }
         }
     }

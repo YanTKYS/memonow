@@ -19,6 +19,21 @@ interface PostDao {
     @Query("UPDATE posts SET weatherCode = :code, temperatureC = :temperature, weatherAt = :at WHERE id = :id")
     suspend fun attachWeather(id: String, code: Int?, temperature: Double?, at: Long): Int
 
+    @Query("SELECT COALESCE(SUM(LENGTH(body) + COALESCE(LENGTH(placeName), 0)), 0) FROM posts")
+    suspend fun textLength(): Long
+
+    @Query("SELECT COUNT(*) FROM posts")
+    suspend fun count(): Int
+
+    @Query("SELECT * FROM posts ORDER BY createdAt ASC, sequence ASC")
+    suspend fun snapshot(): List<Post>
+
+    @Query("DELETE FROM posts")
+    suspend fun deleteAll()
+
+    @Insert
+    suspend fun insertAll(posts: List<Post>)
+
     @Insert
     suspend fun insert(post: Post)
 
