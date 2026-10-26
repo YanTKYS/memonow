@@ -1,6 +1,7 @@
 package com.yantkys.memonow.data
 
 import com.yantkys.memonow.backup.InvalidBackup
+import com.yantkys.memonow.backup.BackupJson
 import java.time.Clock
 import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
@@ -46,7 +47,11 @@ class PostRepository(private val dao: PostDao, private val clock: Clock = Clock.
         block()
         revision++
     }
-    private fun validBody(body: String): String = body.trim().also {
+    private fun validBody(body: String): String {
+        require(body.length <= BackupJson.MAX_BODY) { "本文は10万UTF-16単位までです。" }
+        require(Charsets.UTF_8.newEncoder().canEncode(body)) { "本文に保存できない文字が含まれています。" }
+        return body.trim().also {
         require(it.isNotBlank()) { "Post must not be blank" }
+        }
     }
 }

@@ -73,6 +73,21 @@ class PostRepositoryTest {
         assertTrue(updates.receive().isEmpty())
     }
 
+    @Test fun bodyLimitAppliesToCreationAndEditingWithoutTruncation() = runTest {
+        val body = "🌤".repeat(50_000)
+        val id = repository.create(body)
+        assertEquals(body, repository.find(id)!!.body)
+        try { repository.create(body + "x"); fail("oversized create accepted") } catch (_: IllegalArgumentException) { }
+        try { repository.edit(id, body + "x"); fail("oversized edit accepted") } catch (_: IllegalArgumentException) { }
+        assertEquals(body, repository.find(id)!!.body)
+        assertEquals(1, database.posts().count())
+    }
+
+    @Test fun invalidUnicodeCannotCreateARecordWhichJsonCannotEncode() = runTest {
+        try { repository.create("bad\uD800"); fail("unpaired surrogate accepted") } catch (_: IllegalArgumentException) { }
+        assertTrue(repository.posts.first().isEmpty())
+    }
+
     @Test fun chronologyUsesEpochTimeBeforeLocalSequence() = runTest {
         database.posts().insert(Post(id = "newer", body = "翌日", createdAt = 2000))
         database.posts().insert(Post(id = "older", body = "前日", createdAt = 1000))

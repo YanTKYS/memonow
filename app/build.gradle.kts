@@ -1,8 +1,29 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.kapt)
+}
+
+val appVersion = Properties().apply {
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+val publishedVersionName = appVersion.getProperty("versionName")
+require(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)").matches(publishedVersionName)) { "Invalid versionName" }
+val publishedVersionCode = providers.gradleProperty("memonowVersionCode")
+    .orElse(appVersion.getProperty("versionCode")).get().toInt()
+require(publishedVersionCode in 1..2_100_000_000) { "Invalid versionCode" }
+val signingNames = listOf("MEMONOW_RELEASE_KEYSTORE_PATH", "MEMONOW_RELEASE_STORE_PASSWORD",
+    "MEMONOW_RELEASE_KEY_ALIAS", "MEMONOW_RELEASE_KEY_PASSWORD")
+val signingValues = signingNames.associateWith { providers.environmentVariable(it).orNull }
+val signingComplete = signingValues.values.all { !it.isNullOrBlank() }
+val requireReleaseSigning = tasks.register("requireReleaseSigning") {
+    doLast {
+        check(signingComplete) { "Release signing requires: " + signingNames.filter { signingValues[it].isNullOrBlank() }.joinToString() }
+        check(file(signingValues.getValue("MEMONOW_RELEASE_KEYSTORE_PATH")!!).isFile) { "Release keystore file is missing" }
+    }
 }
 
 android {
@@ -14,10 +35,27 @@ android {
         applicationId = "com.yantkys.memonow"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = publishedVersionCode
+        versionName = publishedVersionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (signingComplete) {
+                storeFile = file(signingValues.getValue("MEMONOW_RELEASE_KEYSTORE_PATH")!!)
+                storePassword = signingValues.getValue("MEMONOW_RELEASE_STORE_PASSWORD")
+                keyAlias = signingValues.getValue("MEMONOW_RELEASE_KEY_ALIAS")
+                keyPassword = signingValues.getValue("MEMONOW_RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isDebuggable = false
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -48,4 +86,9 @@ dependencies {
 
 kapt {
     arguments { arg("room.schemaLocation", "$projectDir/schemas") }
+}
+
+// An unsigned release must never be mistaken for a distributable APK.
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(requireReleaseSigning)
 }
