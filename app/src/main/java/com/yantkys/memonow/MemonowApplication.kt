@@ -10,6 +10,7 @@ import com.yantkys.memonow.metadata.AndroidPlaceSource
 import com.yantkys.memonow.metadata.MetadataSettings
 import com.yantkys.memonow.metadata.OpenMeteoWeather
 import com.yantkys.memonow.metadata.PostMetadata
+import com.yantkys.memonow.metadata.MetadataProblem
 
 class MemonowApplication : Application() {
     val metadataSettings by lazy { MetadataSettings(this) }
@@ -22,8 +23,15 @@ class MemonowApplication : Application() {
     }
     var restoring = false
     fun metadataAllowed() = !restoring && startedScreens > 0 && metadataSettings.enabled.value && locationSource.hasPermission()
+    fun metadataBlockedReason() = when {
+        restoring -> MetadataProblem.RESTORE
+        startedScreens == 0 -> MetadataProblem.BACKGROUND
+        !locationSource.hasPermission() -> MetadataProblem.PERMISSION
+        !metadataSettings.enabled.value -> MetadataProblem.OFF
+        else -> MetadataProblem.CANCELLED
+    }
     val postMetadata by lazy {
-        PostMetadata(repository, locationSource, AndroidPlaceSource(this), OpenMeteoWeather(), ::metadataAllowed)
+        PostMetadata(repository, locationSource, AndroidPlaceSource(this), OpenMeteoWeather(), ::metadataAllowed, blockedReason = ::metadataBlockedReason)
     }
 
     private val database by lazy {

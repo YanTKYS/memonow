@@ -35,6 +35,7 @@ fun MetadataSettingsDialog(app: MemonowApplication, onDisable: () -> Unit, onDis
     val context = LocalContext.current
     val settings = app.metadataSettings
     val enabled by settings.enabled.collectAsStateWithLifecycle()
+    val diagnostic by app.postMetadata.diagnostic.collectAsStateWithLifecycle()
     var permitted by remember { mutableStateOf(app.locationSource.hasPermission()) }
     val owner = LocalLifecycleOwner.current
     DisposableEffect(owner) {
@@ -47,6 +48,7 @@ fun MetadataSettingsDialog(app: MemonowApplication, onDisable: () -> Unit, onDis
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         permitted = granted
         settings.setEnabled(granted)
+        if (!granted) app.postMetadata.interrupt(com.yantkys.memonow.metadata.MetadataProblem.PERMISSION)
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -71,6 +73,8 @@ fun MetadataSettingsDialog(app: MemonowApplication, onDisable: () -> Unit, onDis
                         }
                     })
                 }
+                Text("最後の自動付与結果：${diagnostic.message}")
+                Text("結果は今回の起動中だけ保持します。新規投稿で更新し、過去投稿は再取得しません。")
                 if (!permitted && settings.permissionAsked) {
                     Text("位置権限がありません。繰り返し要求はしません。利用する場合は端末の設定で位置を許可し、戻ってからONにしてください。")
                     TextButton(onClick = {

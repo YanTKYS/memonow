@@ -56,7 +56,10 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         val app = application as MemonowApplication
         app.screenStarted()
-        if (!app.locationSource.hasPermission()) app.metadataSettings.setEnabled(false)
+        if (!app.locationSource.hasPermission()) {
+            app.metadataSettings.setEnabled(false)
+            app.postMetadata.interrupt(com.yantkys.memonow.metadata.MetadataProblem.PERMISSION)
+        }
     }
     override fun onStop() {
         if ((application as MemonowApplication).screenStopped()) model.cancelMetadata()
