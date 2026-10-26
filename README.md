@@ -292,7 +292,9 @@ python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-rele
 
 1. 本PRをレビュー・マージし、上記Environment保護・Secrets・証明書変数を設定します。
 2. Actionsの **Signed release APK** を **main** 上で手動実行します。mainに含まれるコミットだけが対象で、PRでは動きません。
-   手動実行は署名付き候補をArtifacts（約1日）へ保存するだけで、GitHub Releasesへ公開しません。
+   手動実行の成功時は、署名付きAPKとSHA-256を**未公開のDraft Release**にも添付します。Actionsの実行Summaryにリンクが表示されます。
+   スマートフォンのGitHubへ管理者アカウントでログインし、リンク先からAPKを取得してください。Draftは一般公開されず、リポジトリの参照権限が必要です。
+   テスト用タグ名は`test-v`始まりの実行別名称を使用し、正式版`v0.1.0`タグの公開フローとは分離します。短期保存のArtifactsも従来どおり作成します。
 3. 候補を取得し、チェックサムと署名を検証して、チェックリストの実機項目とデータ更新を確認します。
 4. 完了後、リリースノートの先頭コメントを `release-status: draft` から `release-status: ready` へ変更します。
    draftのままタグを作成しても検証ジョブが失敗し、公開しません。
