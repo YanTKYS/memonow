@@ -120,6 +120,14 @@ class BackupTest {
         )) mutate { it.getJSONArray("posts").getJSONObject(0).put(field, value) }
         mutate { it.getJSONArray("posts").getJSONObject(0).put("weatherCode", 3).put("weatherAt", now - 21 * 60_000) }
         invalid += original.replace("\"schemaVersion\": 1", "\"schemaVersion\": 1, \"schemaVersion\": 1")
+        val marker = JSONObject(original).also { it.getJSONArray("posts").getJSONObject(0).put("body", "MARKER") }.toString()
+        invalid += marker.replace("\"MARKER\"", "\"bad\\q\"")
+        invalid += marker.replace("\"MARKER\"", "\"bad\nraw\"")
+        val numberMarker = JSONObject(original).also {
+            it.getJSONArray("posts").getJSONObject(0).put("temperatureC", "NUMBER").put("weatherAt", now)
+        }.toString()
+        invalid += numberMarker.replace("\"NUMBER\"", "1.")
+        invalid += numberMarker.replace("\"NUMBER\"", "01")
         invalid += original + " {}"
         invalid += "{broken JSON"
         invalid += original.replaceFirst("\"sequence\": 1", "\"sequence\": 1e9999")

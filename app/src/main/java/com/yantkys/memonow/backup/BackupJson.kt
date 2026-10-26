@@ -7,6 +7,8 @@ import com.yantkys.memonow.data.Post
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStreamWriter
+import java.io.FilterReader
+import java.io.Reader
 import java.io.FilterInputStream
 import java.io.InputStreamReader
 import java.nio.charset.CodingErrorAction
@@ -33,7 +35,7 @@ object BackupJson {
     fun read(input: InputStream, checkCancelled: () -> Unit = {}): BackupDocument {
         val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
-        JsonReader(InputStreamReader(LimitedInput(input, checkCancelled), decoder)).use { reader ->
+        JsonReader(StrictStrings(InputStreamReader(LimitedInput(input, checkCancelled), decoder))).use { reader ->
             reader.isLenient = false
             reader.beginObject()
             val seen = mutableSetOf<String>()
@@ -131,7 +133,11 @@ object BackupJson {
     private fun scalar(reader: JsonReader): Any? = when (reader.peek()) {
         JsonToken.NULL -> { reader.nextNull(); null }
         JsonToken.STRING -> reader.nextString()
-        JsonToken.NUMBER -> NumberText(reader.nextString())
+        JsonToken.NUMBER -> {
+            val text = reader.nextString()
+            verify(Regex("-?(0|[1-9][0-9]*)(\\.[0-9]+)?([eE][+-]?[0-9]+)?").matches(text))
+            NumberText(text)
+        }
         else -> throw InvalidBackup("項目の型が正しくありません。")
     }
     private fun integer(value: Any?): Long {
@@ -142,6 +148,34 @@ object BackupJson {
     }
     private fun date(value: Any?): Long = integer(value).also { verify(it in 0..MAX_DATE, "日時が正しくありません。") }
     private fun string(value: Any?): String { verify(value is String); return value as String }
+    // Android's JsonReader accepts unknown escapes and raw control characters even
+    // when lenient=false. Preserve its structural parser but enforce string grammar.
+    private class StrictStrings(reader: Reader) : FilterReader(reader) {
+        private var quoted = false
+        private var escaped = false
+        private var unicode = 0
+        private fun inspect(character: Char) {
+            if (unicode > 0) {
+                verify(character in '0'..'9' || character in 'a'..'f' || character in 'A'..'F')
+                unicode--
+            } else if (escaped) {
+                verify(character in "\"\\/bfnrtu")
+                escaped = false
+                if (character == 'u') unicode = 4
+            } else if (quoted) {
+                verify(character.code >= 32)
+                if (character == '\\') escaped = true
+                if (character == '"') quoted = false
+            } else {
+                verify(character.code >= 32 || character in " \t\r\n")
+                if (character == '"') quoted = true
+            }
+        }
+        override fun read(): Int = `in`.read().also { if (it >= 0) inspect(it.toChar()) }
+        override fun read(buffer: CharArray, offset: Int, length: Int): Int = `in`.read(buffer, offset, length).also { count ->
+            if (count > 0) for (index in offset until offset + count) inspect(buffer[index])
+        }
+    }
     private class LimitedInput(input: InputStream, private val checkCancelled: () -> Unit) : FilterInputStream(input) {
         private var count = 0L
         override fun read(): Int {
