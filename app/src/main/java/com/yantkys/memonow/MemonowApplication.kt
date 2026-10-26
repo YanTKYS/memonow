@@ -1,6 +1,7 @@
 package com.yantkys.memonow
 
 import android.app.Application
+import com.yantkys.memonow.backup.BackupStore
 import androidx.room.Room
 import com.yantkys.memonow.data.MemonowDatabase
 import com.yantkys.memonow.data.PostRepository
@@ -19,15 +20,16 @@ class MemonowApplication : Application() {
         startedScreens = (startedScreens - 1).coerceAtLeast(0)
         return startedScreens == 0
     }
-    fun metadataAllowed() = startedScreens > 0 && metadataSettings.enabled.value && locationSource.hasPermission()
+    var restoring = false
+    fun metadataAllowed() = !restoring && startedScreens > 0 && metadataSettings.enabled.value && locationSource.hasPermission()
     val postMetadata by lazy {
         PostMetadata(repository, locationSource, AndroidPlaceSource(this), OpenMeteoWeather(), ::metadataAllowed)
     }
 
-    val repository by lazy {
-        PostRepository(
-            Room.databaseBuilder(this, MemonowDatabase::class.java, "memonow.db")
-                .addMigrations(MemonowDatabase.MIGRATION_1_2).build().posts(),
-        )
+    private val database by lazy {
+        Room.databaseBuilder(this, MemonowDatabase::class.java, "memonow.db")
+            .addMigrations(MemonowDatabase.MIGRATION_1_2).build()
     }
+    val repository by lazy { PostRepository(database.posts()) }
+    val backupStore by lazy { BackupStore(database, repository) }
 }

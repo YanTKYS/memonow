@@ -1,6 +1,7 @@
 package com.yantkys.memonow
 
 import android.os.Bundle
+import com.yantkys.memonow.backup.BackupState
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -74,9 +75,12 @@ class MainActivity : ComponentActivity() {
 private fun MemonowScreen(model: PostViewModel) {
     val app = LocalContext.current.applicationContext as MemonowApplication
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showBackup by rememberSaveable { mutableStateOf(false) }
+    val backup by model.backupState.collectAsStateWithLifecycle()
     val feed by model.feed.collectAsStateWithLifecycle()
     val draft by model.draft.collectAsStateWithLifecycle()
-    val busy by model.busy.collectAsStateWithLifecycle()
+    val writing by model.busy.collectAsStateWithLifecycle()
+    val busy = writing || backup != BackupState.Idle
     val error by model.error.collectAsStateWithLifecycle()
     val sentId by model.sentId.collectAsStateWithLifecycle()
     val editingId by model.editingId.collectAsStateWithLifecycle()
@@ -105,7 +109,8 @@ private fun MemonowScreen(model: PostViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(title = { Text("memonow") }, actions = {
-                TextButton(onClick = { showSettings = true }) { Text("位置・天気設定") }
+                TextButton(onClick = { showBackup = true }, enabled = !writing) { Text("バックアップ") }
+                TextButton(onClick = { showSettings = true }, enabled = !busy) { Text("設定") }
             })
         },
         bottomBar = {
@@ -156,6 +161,9 @@ private fun MemonowScreen(model: PostViewModel) {
         }
     }
 
+    if (showBackup || backup != BackupState.Idle) {
+        BackupDialog(model, backup) { showBackup = false }
+    }
     if (showSettings) {
         MetadataSettingsDialog(app, onDisable = model::cancelMetadata, onDismiss = { showSettings = false })
     }

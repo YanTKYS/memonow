@@ -206,6 +206,11 @@ class PostViewModelTest {
             if (failReads) throw IOException("read failure")
             rows.collect { emit(it) }
         }
+        override suspend fun textLength() = rows.value.sumOf { it.body.length.toLong() + (it.placeName?.length ?: 0) }
+        override suspend fun count() = rows.value.size
+        override suspend fun snapshot() = rows.value
+        override suspend fun deleteAll() { rows.value = emptyList() }
+        override suspend fun insertAll(posts: List<Post>) { rows.value += posts }
         override suspend fun find(id: String) = rows.value.firstOrNull { it.id == id }
         override suspend fun attachPlace(id: String, name: String): Int = error("unused")
         override suspend fun attachWeather(id: String, code: Int?, temperature: Double?, at: Long): Int = error("unused")
