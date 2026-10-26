@@ -27,6 +27,8 @@ jobs:
         run: JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
       - name: Set up Gradle and validate Wrapper
         uses: gradle/actions/setup-gradle@v4
+      - name: Test release guards without secrets
+        run: python3 -m unittest discover -s tools/tests -v
       - name: Build and lint debug app
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug lintDebug
       - name: Upload debug APK
@@ -35,7 +37,7 @@ jobs:
           name: memonow-debug-${{ github.run_number }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@v4
@@ -43,6 +45,7 @@ jobs:
           name: lint-report-${{ github.run_number }}
           path: app/build/reports/lint-results-debug.html
           if-no-files-found: ignore
+          retention-days: 1
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -50,3 +53,4 @@ jobs:
           name: unit-tests-${{ github.run_number }}
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
+          retention-days: 1

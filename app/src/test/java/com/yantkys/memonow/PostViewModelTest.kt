@@ -198,6 +198,16 @@ class PostViewModelTest {
         assertEquals(1, dao.rows.value.size)
     }
 
+    @Test fun oversizedInputStaysInDraftAndNeverBecomesAnUnbackuppablePost() = runTest {
+        val body = "x".repeat(100_001)
+        model.updateDraft(body)
+        model.send()
+        runCurrent()
+        assertEquals(body, model.draft.value)
+        assertTrue(dao.rows.value.isEmpty())
+        assertNotNull(model.error.value)
+    }
+
     private class TestDao : PostDao {
         val rows = MutableStateFlow<List<Post>>(emptyList())
         var failWrites = false

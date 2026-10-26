@@ -21,7 +21,12 @@
 **debug APKで大切な記録を継続保存しないでください。** CI・別PC・ビルド環境の再生成でdebug署名鍵が変わると上書き更新できません。
 アンインストールや「ストレージを消去」、端末初期化で投稿は失われ、自動バックアップからは復元できません。
 更新時に署名不一致が出た場合は、先にJSONを書き出し、別端末等で復元を検証してください。バックアップ未確認のままアンインストールしないでください。
-継続利用用の署名・データ保護はリリース準備の後続Issueで整えます。署名鍵はコミットしません。
+継続更新用のrelease署名構成を用意しています（以下の手順）。今回のPRでは正式鍵の設定・実機確認・タグ公開は行っていません。署名鍵はコミットしません。
+
+投稿・編集はバックアップと同じ100,000 UTF-16単位までです。超過時は送信/保存を無効にし、本文を残します。
+全体の件数が1万件に達した場合や、本文量の保守的な概算が10MiB上限に近い場合は、入力欄付近に警告します。
+概算はJSONのエスケープを多めに見積もるため、実際に上限を超えていない場合もあります。正確な可否は「JSONを保存」で確認してください。
+警告だけで投稿全体を止めたり、過去の記録を自動削除・切り詰めたりしません。既存の長すぎる本文も自動変更しません。
 
 ## 手動JSONバックアップ・復元
 
@@ -93,7 +98,7 @@ UTF-8、`app: "memonow"`、`schemaVersion: 1`。バックアップのスキー�
 4. **復元を確認するまで旧端末のアプリ・データと元のJSONを削除しないでください。**
 
 debug APKは署名鍵が環境ごとに変わる場合があります。署名不一致を回避するためのアンインストールでは端末内記録が消えます。
-自動バックアップは無効なため、検証済みのJSONが必要です。正式なリリース署名は別Issueで整備します。
+自動バックアップは無効なため、検証済みのJSONが必要です。正式署名への切替は、下記のrelease手順と実機チェックリストに従ってください。
 
 ## 位置・天気の自動付与とプライバシー
 
@@ -195,14 +200,128 @@ Roomスキーマは `app/schemas` に保存します。将来変更時はバー�
 UI自動テストはまだ含みません。
 Android StudioではAPI 26以上の端末・エミュレーターを選んでRunしてください。
 
-## GitHub ActionsからAPKを取得
+## 継続更新用release APK（公開準備）
+
+`applicationId`は `com.yantkys.memonow` を維持します。公開用バージョンはルートの `version.properties` に一元管理し、
+現時点は `versionName=0.1.0` / `versionCode=1` です。配布する更新では **versionCodeを必ず単調増加**させ、versionNameも更新します。
+同じ鍵・同じapplicationId・増加するversionCodeが通常の上書き更新の前提です。DB/JSONのバージョンとは別です。
+
+今回のPRは配布準備で、正式な署名鍵は作成・取得せず、タグも公開リリースも作成していません。
+実機確認は [公開前チェックリスト](docs/RELEASE_CHECKLIST.md) に未実施として記載しています。
+[リリースノート案](docs/releases/v0.1.0.md) はdraft状態です。
+
+### 鍵を一度だけ生成し、安全に保管する
+
+以下は**ユーザー自身の安全なPC**で実行します。チャットやPRへ鍵・パスワードを貼らず、リポジトリ内へ保存しないでください。
+JDK 17のkeytoolは対話でパスワード・証明書情報を尋ねます。生成時のaliasとパスワードを安全な管理先へ記録します。証明書の名前や組織はAPKから読める公開情報なので、公開してよい内容を使います。
+
+```sh
+mkdir -p "$HOME/.memonow-signing"
+chmod 700 "$HOME/.memonow-signing"
+keytool -genkeypair -storetype JKS -keyalg RSA -keysize 4096 -validity 10000 \
+  -alias memonow -keystore "$HOME/.memonow-signing/memonow-release.jks"
+# 公開可能な証明書SHA-256を確認（秘密鍵ではありません）
+keytool -list -v -keystore "$HOME/.memonow-signing/memonow-release.jks" -alias memonow
+```
+
+鍵ファイル・storeパスワード・keyパスワード・aliasを、暗号化した別媒体や安全な管理先にもバックアップしてください。
+バックアップした鍵を別の安全な環境で読み出し、同じ公開証明書であることを確認してください。
+**鍵を紛失すると、通常は同じアプリへ上書き更新できません。** 毎回再生成したり、debug鍵を正式鍵として流用しないでください。
+鍵・base64・パスワードは署名情報であり、Artifactsやログへ出さないでください。公開証明書フィンガープリントは照合用に保管できます。
+
+### GitHub Environmentと必須の署名設定
+
+リポジトリのSettings → Environmentsで **release-signing** を作成し、先に次の保護を設定します。
+
+- 必須レビュアーを設定し、可能なら自己承認を防ぎます。手動候補ビルドはレビュー済みmain、タグ公開時は実機チェック完了を確認して承認します。
+- Deployment branches/tagsをmainブランチと意図した`v*`タグに限定します。mainとタグの作成・更新・削除権限もRulesets等で保護し、未レビューの変更を通さない運用にしてください。
+- 以下の秘密情報は**Environment Secrets**へ入れます。PRや任意ブランチから利用可能なRepository/Organization Secretsとして保存しないでください。
+
+| Environment Secret | 内容 |
+| --- | --- |
+| `MEMONOW_RELEASE_KEYSTORE_BASE64` | 同じJKS鍵ファイルの改行なしbase64（暗号化ではありません） |
+| `MEMONOW_RELEASE_STORE_PASSWORD` | keystoreパスワード |
+| `MEMONOW_RELEASE_KEY_ALIAS` | 生成した鍵のalias（上記例はmemonow） |
+| `MEMONOW_RELEASE_KEY_PASSWORD` | 鍵のパスワード |
+
+Environment **Variable** `MEMONOW_RELEASE_CERT_SHA256` にkeytoolで確認した証明書SHA-256（コロン有無はどちらも可）を設定します。
+これは公開値で、別の鍵やdebug署名を誤って配布しないための照合値です。
+base64は例えば安全なPCで `base64 < "$HOME/.memonow-signing/memonow-release.jks" | tr -d '\n'` で作成します。
+出力を共有ログ・画面共有・チャットへ流さず、Secrets設定へ直接取り込み、不要な一時ファイルは削除してください。
+
+Secretsがなくても既存のPR/mainのdebug CIと自動テストは実行できます。
+一方、releaseを実行した場合は必須設定不足を明示して失敗し、unsigned APKを配布可能なreleaseとして扱いません。
+署名ジョブはEnvironment承認後のみ鍵を受け取り、runner一時領域にモード600で復号し、終了時に削除します。
+署名処理ではGradleキャッシュ用Actionを使わず、configuration cacheも無効にし、Artifactsは検証済みAPKとSHA-256だけに限定します。
+
+### ローカルの正式署名ビルドと検証
+
+安全なシェル/秘密管理ツールから次の環境変数を渡してください。値をコマンド履歴・ソース・Gradleプロパティファイルに書かないでください。
+
+- `MEMONOW_RELEASE_KEYSTORE_PATH`：鍵の絶対パス
+- `MEMONOW_RELEASE_STORE_PASSWORD` / `MEMONOW_RELEASE_KEY_ALIAS` / `MEMONOW_RELEASE_KEY_PASSWORD`
+- `MEMONOW_RELEASE_CERT_SHA256`：照合用の公開証明書SHA-256
+
+```sh
+./gradlew --no-daemon --no-configuration-cache testDebugUnitTest assembleDebug lintDebug
+./gradlew --no-daemon --no-configuration-cache testReleaseUnitTest assembleRelease lintRelease
+python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-release.apk
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk
+```
+
+出力は `app/build/outputs/apk/release/app-release.apk`。`verify-apk`は署名の暗号学的検証に加え、証明書の固定値・applicationId・version値・非debuggableを確認します。
+検証時に`--debug`・`--info`・`--scan`等で署名設定をログ/外部サービスへ出さないでください。作業後は秘密の環境変数を解除します。
+鍵を渡す設定は通常のdebug開発環境に保存しません。
+
+### 候補ビルド → 実機確認 → タグ公開
+
+1. 本PRをレビュー・マージし、上記Environment保護・Secrets・証明書変数を設定します。
+2. Actionsの **Signed release APK** を **main** 上で手動実行します。mainに含まれるコミットだけが対象で、PRでは動きません。
+   手動実行は署名付き候補をArtifacts（約1日）へ保存するだけで、GitHub Releasesへ公開しません。
+3. 候補を取得し、チェックサムと署名を検証して、チェックリストの実機項目とデータ更新を確認します。
+4. 完了後、リリースノートの先頭コメントを `release-status: draft` から `release-status: ready` へ変更します。
+   draftのままタグを作成しても検証ジョブが失敗し、公開しません。
+5. version値・ノートを確定したmainのコミットを指定して、**ユーザーが意図して**タグを作成・pushします。初回の例は以下です（今回のPRでは実行しません）。
+
+```sh
+git tag -a v0.1.0 <確認済みmainコミットSHA> -m 'memonow v0.1.0'
+git push origin v0.1.0
+```
+
+タグ名は`v` + versionNameと一致する必要があります。次回更新は例えばversionCode=2 / versionName=0.1.1にし、
+`docs/releases/v0.1.1.md`を用意して同じ手順を行います。単に再実行するために配布済みversionCodeを再利用しないでください。
+
+タグ時は、秘密なしのテスト・ビルド・Lint成功後に保護環境で署名し、証明書等を検証してからAPKと`.apk.sha256`をGitHub Releasesへ添付します。
+アップロード中はdraftのままにし、全ファイルの添付が成功した後だけ公開します。GitHub ReleasesのファイルはActions Artifactsの短期失効には依存しません。
+途中失敗でdraftが残った場合は内容をレビューして手動整理してください。自動で既存リリースを上書き・削除しません。
+リリースの権限は公開ジョブだけがcontents:writeを持ち、署名ジョブはreadのみです。
+
+取得したファイルの確認例：
+
+```sh
+sha256sum -c memonow-v0.1.0.apk.sha256
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs memonow-v0.1.0.apk
+```
+
+SHA-256はファイルの一致、証明書SHA-256は更新の同一署名を確認する別の値です。debug証明書と混同しないでください。
+
+### debugからの初回移行とrelease同士の更新
+
+- **debug→正式署名releaseは原則上書き不可**です。旧debug版でJSONを保存し、別のテスト端末/インストールで内容と復元を確認してから切り替えます。
+  バックアップ未確認のままアンインストールを促すことはしません。元のデータとJSONは移行後も確認が終わるまで保管します。
+- 正式版でテスト記録を作り、同じ鍵・applicationId・増加するversionCodeの次版を `adb install -r` で入れ、投稿・属性・設定・JSON互換性が残ることを確認します。
+  更新検証だけは `-PmemonowVersionCode=2` のような一時overrideも使えます。配布時はoverrideせずversion.propertiesを更新してください。
+- 今回のクラウドでは一時的な検証専用鍵による再ビルド・署名照合を行います。正式鍵・正式署名の配布・端末上の更新動作はユーザーの確認対象です。
+
+## GitHub Actionsからdebug APKを取得
 
 プッシュ・Pull Requestで `.github/workflows/android.yml` がユニットテスト・ビルド・Lintを実行します。
 Actions画面から手動実行もできます。
 
 1. GitHubの **Actions → Android debug APK** で対象コミットの成功した実行を開きます。
 2. **Artifacts** の `memonow-debug-<実行番号>` をダウンロードします（GitHubへのログインが必要です）。
-3. ZIPを展開し、`app-debug.apk` を取り出します。保存期間は14日です。
+3. ZIPを展開し、`app-debug.apk` を取り出します。ワークフローでは保存期間1日を指定しています。2026-10-26に取得したArtifactsのcreated_at/expires_atも約1日でした。
+   管理ポリシーAPIは権限不足で値を取得できていないため、実際の期限はActions画面のExpires表示を確認してください。長期保管が必要なAPKは期限前に取得してください。
 
 debug APKは開発用の自動生成鍵で署名され、Play Store配布用ではありません。
 CIや別PCでは署名鍵が異なるため、既存インストールの更新に失敗することがあります。

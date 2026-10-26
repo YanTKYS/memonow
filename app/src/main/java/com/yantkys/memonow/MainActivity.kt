@@ -2,6 +2,8 @@ package com.yantkys.memonow
 
 import android.os.Bundle
 import com.yantkys.memonow.backup.BackupState
+import com.yantkys.memonow.backup.BackupJson
+import com.yantkys.memonow.backup.backupCapacityWarning
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -32,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -89,6 +92,7 @@ private fun MemonowScreen(model: PostViewModel) {
     val listState = rememberLazyListState()
     var initiallyPositioned by rememberSaveable { mutableStateOf(false) }
     val posts = (feed as? FeedState.Ready)?.posts
+    val capacityWarning = remember(posts) { posts?.let(::backupCapacityWarning) }
 
     LaunchedEffect(posts, sentId) {
         if (posts != null) {
@@ -115,8 +119,10 @@ private fun MemonowScreen(model: PostViewModel) {
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp) {
+                Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding().padding(12.dp)) {
+                    capacityWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Row(
-                    Modifier.fillMaxWidth().imePadding().navigationBarsPadding().padding(12.dp),
+                    Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.Bottom,
                 ) {
@@ -129,10 +135,13 @@ private fun MemonowScreen(model: PostViewModel) {
                         minLines = 1,
                         maxLines = 5,
                         enabled = !busy,
+                        isError = draft.length > BackupJson.MAX_BODY,
+                        supportingText = { if (draft.length > BackupJson.MAX_BODY) Text("本文は10万文字までです（絵文字などは2文字）。") },
                     )
-                    Button(onClick = model::send, enabled = !busy && draft.isNotBlank()) {
+                    Button(onClick = model::send, enabled = !busy && draft.isNotBlank() && draft.length <= BackupJson.MAX_BODY) {
                         Text(if (busy) "保存中" else "送信")
                     }
+                }
                 }
             }
         },
@@ -179,11 +188,13 @@ private fun MemonowScreen(model: PostViewModel) {
                     minLines = 3,
                     maxLines = 8,
                     enabled = !busy,
+                    isError = editDraft.length > BackupJson.MAX_BODY,
+                    supportingText = { if (editDraft.length > BackupJson.MAX_BODY) Text("本文は10万文字までです（絵文字などは2文字）。") },
                     modifier = Modifier.fillMaxWidth(),
                 )
             },
             confirmButton = {
-                TextButton(onClick = model::edit, enabled = !busy && editDraft.isNotBlank()) { Text("保存") }
+                TextButton(onClick = model::edit, enabled = !busy && editDraft.isNotBlank() && editDraft.length <= BackupJson.MAX_BODY) { Text("保存") }
             },
             dismissButton = { TextButton(onClick = model::cancelEditing, enabled = !busy) { Text("キャンセル") } },
         )

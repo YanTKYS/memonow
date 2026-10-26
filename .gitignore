@@ -16,3 +16,15 @@ keystore.properties
 .env.*
 .DS_Store
 Thumbs.db
+
+# Signing exports and generated distribution files
+*.p12
+*.pfx
+*.jks.base64
+*.keystore.base64
+signing.properties
+/dist/
+
+# Python release-tool caches
+__pycache__/
+*.py[cod]
