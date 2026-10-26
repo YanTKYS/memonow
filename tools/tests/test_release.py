@@ -118,19 +118,23 @@ class ReleaseGuards(unittest.TestCase):
 
 
     def test_workflow_action_references_have_valid_at_separator(self):
-        # A malformed `uses: owner/action$sha` prevents the whole workflow from starting.
-        from pathlib import Path
-        import re
-        for filename in ['android.yml', 'release.yml']:
-            contents = (ROOT / '.github/workflows' / filename).read_text(encoding='utf-8')
-            actions = re.findall(r'^\\s*-?\\s*uses:\\s*([^\\s#]+)', contents, re.MULTILINE)
-            self.assertTrue(actions, f'No actions found in {filename}')
-            for action in actions:
-                if action.startswith('./'):
+        # An incorrect action reference prevents the entire workflow from starting.
+        for filename in ('android.yml', 'release.yml'):
+            content = (ROOT / '.github/workflows' / filename).read_text(encoding='utf-8')
+            action_refs = [
+                line.split('uses:', 1)[1].split('#', 1)[0].strip()
+                for line in content.splitlines()
+                if line.lstrip().startswith(('- uses:', 'uses:'))
+            ]
+            self.assertTrue(action_refs, f'No actions found in {filename}')
+            for action_ref in action_refs:
+                if action_ref.startswith('./'):
                     continue
-                self.assertRegex(action, r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+
-,
-                                 f'Invalid action reference in {filename}: {action}')
+                name, separator, ref = action_ref.partition('@')
+                self.assertTrue(
+                    separator and name.count('/') >= 1 and ref and not any(char.isspace() for char in action_ref),
+                    f'Invalid action reference in {filename}: {action_ref}'
+                )
 
 
 if __name__ == '__main__':
