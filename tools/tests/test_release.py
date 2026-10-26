@@ -117,5 +117,21 @@ class ReleaseGuards(unittest.TestCase):
             self.assertEqual(f'MEMONOW_RELEASE_KEYSTORE_PATH={path}\n', (Path(folder) / 'env').read_text())
 
 
+    def test_workflow_action_references_have_valid_at_separator(self):
+        # A malformed `uses: owner/action$sha` prevents the whole workflow from starting.
+        from pathlib import Path
+        import re
+        for filename in ['android.yml', 'release.yml']:
+            contents = (ROOT / '.github/workflows' / filename).read_text(encoding='utf-8')
+            actions = re.findall(r'^\\s*-?\\s*uses:\\s*([^\\s#]+)', contents, re.MULTILINE)
+            self.assertTrue(actions, f'No actions found in {filename}')
+            for action in actions:
+                if action.startswith('./'):
+                    continue
+                self.assertRegex(action, r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+
+,
+                                 f'Invalid action reference in {filename}: {action}')
+
+
 if __name__ == '__main__':
     unittest.main()
