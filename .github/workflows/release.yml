@@ -92,6 +92,46 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  preview:
+    # Manually signed candidates go to an unpublished Draft Release for Android testing.
+    if: github.event_name == 'workflow_dispatch'
+    needs: [validate, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified signed APK
+        uses: actions/download-artifact$d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signed-release-${{ needs.validate.outputs.version }}
+          path: dist
+      - name: Create Draft Release for device testing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c "memonow-v${VERSION}.apk.sha256")
+          # test-v* names never trigger the final v* publication workflow.
+          TAG="test-v${VERSION}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}"
+          URL=$(gh release create "$TAG" \
+            "dist/memonow-v${VERSION}.apk" \
+            "dist/memonow-v${VERSION}.apk.sha256" \
+            --draft --prerelease --latest=false --target "$COMMIT" \
+            --title "memonow v${VERSION} (device test #${GITHUB_RUN_ID})" \
+            --notes "Unpublished signed APK for Android device tests. Run: ${GITHUB_RUN_ID}, attempt: ${GITHUB_RUN_ATTEMPT}, commit: ${COMMIT}. Not an official release. Sign in with a repository maintainer account to download. Keep a JSON backup before changing installations.")
+          {
+            echo "### Unpublished Android test APK"
+            echo "Signed APK and SHA-256 are in a **Draft Release** (not public)."
+            echo ""
+            echo "[Open Draft Release and download APK](${URL})"
+            echo ""
+            echo "If the link does not open on your phone, sign in with a repository maintainer account."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [validate, sign]
