@@ -81,7 +81,7 @@ fun MetadataSettingsDialog(app: MemonowApplication, onDisable: () -> Unit, onDis
                         context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
                     }) { Text("端末のアプリ設定を開く") }
                 }
-                Text("端末の位置設定OFF・圏外・通信エラーでは属性は空欄です。過去投稿への自動補完は行いません。OFFにしても既存の属性は残ります。")
+                Text("一時的な取得失敗は2秒後に1回だけ再試行します。連続投稿は上限付きで順番を待ちます。画面離脱・設定OFFで中断し、投稿後2分を超えて補完しません。取得を保証するものではありません。OFFにしても既存の属性は残ります。")
                 Text("天気は投稿時刻に近い推定値です（最大20分差）。Weather data by Open-Meteo.com · CC BY 4.0。無料APIは非商用利用向けです。")
                 TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://open-meteo.com/en/terms"))) }) { Text("Open-Meteo（出典・利用条件）") }
                 TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://creativecommons.org/licenses/by/4.0/"))) }) { Text("CC BY 4.0 ライセンス") }

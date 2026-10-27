@@ -48,7 +48,10 @@ class OpenMeteoWeather(
                 connection.readTimeout = 3_000
                 connection.instanceFollowRedirects = false
                 connection.setRequestProperty("Accept", "application/json")
-                if (connection.responseCode != 200) throw MetadataFailure(MetadataProblem.WEATHER_HTTP)
+                val status = connection.responseCode
+                if (status != 200) throw MetadataFailure(
+                    if (status == 429 || status in 500..599) MetadataProblem.WEATHER_UNAVAILABLE else MetadataProblem.WEATHER_HTTP,
+                )
                 connection.inputStream.use { input ->
                     val output = ByteArrayOutputStream()
                     val buffer = ByteArray(4096)

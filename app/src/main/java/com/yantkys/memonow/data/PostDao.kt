@@ -13,10 +13,10 @@ interface PostDao {
     @Query("SELECT * FROM posts WHERE id = :id")
     suspend fun find(id: String): Post?
 
-    @Query("UPDATE posts SET placeName = :name WHERE id = :id")
+    @Query("UPDATE posts SET placeName = :name WHERE id = :id AND placeName IS NULL")
     suspend fun attachPlace(id: String, name: String): Int
 
-    @Query("UPDATE posts SET weatherCode = :code, temperatureC = :temperature, weatherAt = :at WHERE id = :id")
+    @Query("UPDATE posts SET weatherCode = :code, temperatureC = :temperature, weatherAt = :at WHERE id = :id AND weatherAt IS NULL")
     suspend fun attachWeather(id: String, code: Int?, temperature: Double?, at: Long): Int
 
     @Query("SELECT COALESCE(SUM(LENGTH(body) + COALESCE(LENGTH(placeName), 0)), 0) FROM posts")

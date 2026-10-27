@@ -290,6 +290,161 @@ class MetadataTest {
         assertFalse(service.diagnostic.value.weatherSaved)
     }
 
+    @Test fun transientLocationTimeoutRecoversOnceAndPreservesPost() = runTest {
+        var calls = 0
+        locate = { if (++calls == 1) { delay(60_000) }; fix }
+        val id = repository.create("先行保存")
+        val original = repository.find(id)!!
+        val service = enricher()
+        service.enrich(id)
+        assertEquals(2, calls)
+        assertEquals(original.copy(placeName = "沖縄県 糸満市", weatherCode = 0, temperatureC = 25.5, weatherAt = now), repository.find(id))
+        assertEquals(2, service.diagnostic.value.attempt)
+        assertEquals(MetadataStage.DONE, service.diagnostic.value.stage)
+    }
+
+    @Test fun retriesOnlyMissingAttributeAndNeverOverwritesSuccessfulOne() = runTest {
+        val service = enricher()
+        var placeCalls = 0
+        place = { placeCalls++; "最初の地名" }
+        weather = { if (weatherCalls == 1) throw IOException("temporary") else Weather(0, 25.5, now) }
+        val id = repository.create("本文")
+        service.enrich(id)
+        assertEquals(2, weatherCalls)
+        assertEquals(1, placeCalls)
+        place = { fail("already attached place must not be queried"); null }
+        weather = { fail("already attached weather must not be queried"); null }
+        service.enrich(id)
+        assertEquals("最初の地名", repository.find(id)!!.placeName)
+        assertEquals(25.5, repository.find(id)!!.temperatureC!!, 0.0)
+    }
+
+    @Test fun failedPlaceRecoversWithoutRefetchingSuccessfulWeather() = runTest {
+        var calls = 0
+        place = { if (++calls == 1) throw IOException("temporary") else "市" }
+        enricher().enrich(repository.create("本文"))
+        assertEquals(2, calls)
+        assertEquals(1, weatherCalls)
+    }
+
+    @Test fun retryLimitAndPermanentFailuresDoNotLoop() = runTest {
+        val service = enricher()
+        locate = { delay(60_000); fix }
+        service.enrich(repository.create("timeouts"))
+        assertEquals(2, locationCalls)
+        assertEquals(MetadataProblem.LOCATION_TIMEOUT, service.diagnostic.value.problem)
+        for (problem in listOf(MetadataProblem.PERMISSION, MetadataProblem.LOCATION_OFF, MetadataProblem.PROVIDER)) {
+            var calls = 0
+            locate = { calls++; throw MetadataFailure(problem) }
+            service.enrich(repository.create("permanent"))
+            assertEquals(1, calls)
+        }
+        locate = { fix }
+        weatherCalls = 0
+        weather = { throw MetadataFailure(MetadataProblem.WEATHER_HTTP) }
+        service.enrich(repository.create("HTTP 4xx"))
+        assertEquals(1, weatherCalls)
+    }
+
+    @Test fun boundedQueueServesEightBurstPostsWithAtMostTwoLookupsAndRejectsNinth() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        var running = 0
+        var maximum = 0
+        locate = {
+            running++; maximum = maxOf(maximum, running)
+            if (running == 2) started.complete(Unit)
+            try { gate.await(); fix } finally { running-- }
+        }
+        val service = enricher()
+        val ids = (1..9).map { repository.create("post $it") }
+        val jobs = ids.take(8).map { id -> launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { service.enrich(id) } }
+        started.await()
+        service.enrich(ids.last())
+        assertEquals(MetadataProblem.BUSY, service.diagnostic.value.problem)
+        gate.complete(Unit)
+        jobs.forEach { it.join() }
+        assertEquals(2, maximum)
+        assertEquals(8, locationCalls)
+        for (id in ids.take(8)) assertNotNull(repository.find(id)!!.weatherAt)
+        assertNull(repository.find(ids.last())!!.weatherAt)
+        assertEquals("post 9", repository.find(ids.last())!!.body)
+    }
+
+    @Test fun permissionOffAndInterruptionDuringRetryPreventFurtherRequests() = runTest {
+        val service = enricher()
+        val entered = CompletableDeferred<Unit>()
+        locate = { entered.complete(Unit); null }
+        val id = repository.create("本文")
+        val job = launch { service.enrich(id) }
+        entered.await()
+        permitted = false
+        service.interrupt(MetadataProblem.OFF)
+        job.cancel(); job.join()
+        assertEquals(1, locationCalls)
+        assertEquals(0, weatherCalls)
+        assertNull(repository.find(id)!!.weatherAt)
+        assertEquals(MetadataProblem.OFF, service.diagnostic.value.problem)
+    }
+
+    @Test fun expiryAndDeletionAfterFailureDoNotFetchAgain() = runTest {
+        val time = java.util.concurrent.atomic.AtomicLong(now)
+        val movingClock = object : Clock() {
+            override fun getZone() = ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): Clock = this
+            override fun instant() = Instant.ofEpochMilli(time.get())
+        }
+        val service = PostMetadata(repository, LocationSource { locationCalls++; fix }, PlaceSource { "市" },
+            WeatherSource { weatherCalls++; time.set(now + 121_000); throw IOException("temporary") }, { true }, movingClock)
+        service.enrich(repository.create("expires"))
+        assertEquals(1, locationCalls)
+        assertEquals(MetadataProblem.EXPIRED, service.diagnostic.value.problem)
+        val id = repository.create("deleted")
+        place = { repository.delete(id); throw IOException("temporary") }
+        enricher().enrich(id)
+        assertNull(repository.find(id))
+    }
+
+    @Test fun restoreAndNonCooperativeLateResultCannotWriteOrReplaceNewDiagnostic() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val resume = CompletableDeferred<Unit>()
+        val service = enricher()
+        val id = repository.create("original")
+        place = {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                started.complete(Unit); resume.await(); "古い地名"
+            }
+        }
+        val job = launch { service.enrich(id) }
+        started.await()
+        repository.prepareReplacement { 0L } // Invalidate even if restored UUID is identical.
+        service.interrupt(MetadataProblem.RESTORE)
+        job.cancel()
+        val expected = service.diagnostic.value
+        resume.complete(Unit); job.join()
+        assertNull(repository.find(id)!!.placeName)
+        assertNull(repository.find(id)!!.weatherAt)
+        assertEquals(expected, service.diagnostic.value)
+    }
+
+    @Test fun queuedCancellationReleasesCapacityForNextPost() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        locate = { if (locationCalls == 2) started.complete(Unit); gate.await(); fix }
+        val service = enricher()
+        val ids = (1..4).map { repository.create("queue $it") }
+        val first = ids.take(2).map { id -> launch { service.enrich(id) } }
+        started.await()
+        val cancelled = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { service.enrich(ids[2]) }
+        cancelled.cancel(); cancelled.join()
+        val next = launch { service.enrich(ids[3]) }
+        gate.complete(Unit)
+        first.forEach { it.join() }; next.join()
+        assertNull(repository.find(ids[2])!!.weatherAt)
+        assertNotNull(repository.find(ids[3])!!.weatherAt)
+        assertEquals(3, locationCalls)
+    }
+
     @Test fun platformPermissionAndMunicipalityOnlyExtraction() = runTest {
         try {
             AndroidLocationSource(context).locate()
