@@ -30,6 +30,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], application = Application::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MetadataTest {
     private val context get() = ApplicationProvider.getApplicationContext<Application>()
     private lateinit var db: MemonowDatabase
@@ -49,9 +50,9 @@ class MetadataTest {
         repository = PostRepository(db.posts(), clock)
     }
     @After fun tearDown() { db.close() }
-    private fun enricher() = PostMetadata(repository,
+    private fun enricher(elapsed: () -> Long = { android.os.SystemClock.elapsedRealtime() }) = PostMetadata(repository,
         LocationSource { locationCalls++; locate() }, PlaceSource { place(it) },
-        WeatherSource { weatherCalls++; weather(it) }, { permitted }, clock)
+        WeatherSource { weatherCalls++; weather(it) }, { permitted }, clock, elapsedMillis = elapsed)
 
     @Test fun metadataUsesRoundedCoordinatesAndNeverChangesIdentityOrBody() = runTest {
         val id = repository.create("本文")
@@ -307,10 +308,12 @@ class MetadataTest {
         val service = enricher()
         var placeCalls = 0
         place = { placeCalls++; "最初の地名" }
+        locate = { if (locationCalls > 1) throw MetadataFailure(MetadataProblem.PROVIDER); fix }
         weather = { if (weatherCalls == 1) throw IOException("temporary") else Weather(0, 25.5, now) }
         val id = repository.create("本文")
         service.enrich(id)
         assertEquals(2, weatherCalls)
+        assertEquals(1, locationCalls)
         assertEquals(1, placeCalls)
         place = { fail("already attached place must not be queried"); null }
         weather = { fail("already attached weather must not be queried"); null }
@@ -321,10 +324,65 @@ class MetadataTest {
 
     @Test fun failedPlaceRecoversWithoutRefetchingSuccessfulWeather() = runTest {
         var calls = 0
+        locate = { if (locationCalls > 1) throw MetadataFailure(MetadataProblem.PROVIDER); fix }
         place = { if (++calls == 1) throw IOException("temporary") else "市" }
-        enricher().enrich(repository.create("本文"))
+        val id = repository.create("本文")
+        enricher().enrich(id)
         assertEquals(2, calls)
+        assertEquals(1, locationCalls)
         assertEquals(1, weatherCalls)
+        assertEquals("市", repository.find(id)!!.placeName)
+        assertEquals(25.5, repository.find(id)!!.temperatureC!!, 0.0)
+    }
+
+    @Test fun cachedPositionExpiresBeforeRetryWithoutAnotherLocationRequest() = runTest {
+        locate = { fix.copy(ageMillis = 119_000) }
+        weather = { throw IOException("temporary") }
+        val service = enricher { testScheduler.currentTime }
+        val id = repository.create("本文")
+        service.enrich(id)
+        assertEquals(1, locationCalls)
+        assertEquals(1, weatherCalls)
+        assertEquals(MetadataProblem.LOCATION_STALE, service.diagnostic.value.problem)
+        assertEquals("沖縄県 糸満市", repository.find(id)!!.placeName)
+        assertNull(repository.find(id)!!.weatherAt)
+    }
+
+    @Test fun positionExpiryDuringWeatherResponsePreventsSavingIt() = runTest {
+        locate = { fix.copy(ageMillis = 119_000) }
+        weather = { delay(1_500); Weather(0, 25.5, now) }
+        val service = enricher { testScheduler.currentTime }
+        val id = repository.create("本文")
+        service.enrich(id)
+        assertEquals(MetadataProblem.LOCATION_STALE, service.diagnostic.value.problem)
+        assertEquals(1, weatherCalls)
+        assertNull(repository.find(id)!!.weatherAt)
+    }
+
+    @Test fun cachedPointCannotBeUsedAfterGuardsChangeDuringPartialRetry() = runTest {
+        for (change in listOf("permission", "background", "delete", "restore")) {
+            permitted = true
+            var calls = 0
+            lateinit var id: String
+            lateinit var service: PostMetadata
+            val entered = CompletableDeferred<Unit>()
+            weather = { calls++; entered.complete(Unit); throw IOException("temporary") }
+            service = enricher()
+            id = repository.create(change)
+            val job = launch { service.enrich(id) }
+            entered.await()
+            service.diagnostic.first { it.stage == MetadataStage.RETRY }
+            // Change the guard while the 2-second retry is pending.
+            when (change) {
+                "permission" -> permitted = false
+                "background" -> service.interrupt(MetadataProblem.BACKGROUND)
+                "delete" -> repository.delete(id)
+                "restore" -> repository.prepareReplacement { 0L }
+            }
+            job.join()
+            assertEquals(1, calls)
+            assertNull(repository.find(id)?.weatherAt)
+        }
     }
 
     @Test fun retryLimitAndPermanentFailuresDoNotLoop() = runTest {

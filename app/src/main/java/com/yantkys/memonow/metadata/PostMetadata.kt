@@ -45,6 +45,7 @@ class PostMetadata(
     private val allowed: () -> Boolean,
     private val clock: Clock = Clock.systemUTC(),
     private val blockedReason: () -> MetadataProblem = { MetadataProblem.OFF },
+    private val elapsedMillis: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) {
     private val slots = Semaphore(2)
     private val admitted = Semaphore(8) // Two running + at most six waiting; no persistent backlog.
@@ -97,48 +98,64 @@ class PostMetadata(
             if (queued != true) { stop(MetadataProblem.BUSY); return }
             val existing = repository.find(id) ?: run { stop(MetadataProblem.POST_CHANGED); return }
             state = state.copy(placeSaved = !existing.placeName.isNullOrBlank(), weatherSaved = existing.weatherAt != null)
+            // Keep only the rounded point and its age for this post/job; never persist it.
+            var point: CoarsePoint? = null
+            var positionAgeAtFetch = 0L
+            var positionFetchedAt = 0L
+            suspend fun positionActive(): Boolean {
+                if (!active()) return false
+                if (point != null && elapsedMillis() - positionFetchedAt !in 0..(120_000 - positionAgeAtFetch)) {
+                    stop(MetadataProblem.LOCATION_STALE); return false
+                }
+                return true
+            }
             for (number in 1..2) {
-                if (!active()) return
+                if (!positionActive()) return
                 state = state.copy(attempt = number)
                 if (state.placeSaved && state.weatherSaved) { stage(MetadataStage.DONE); return }
-                stage(MetadataStage.LOCATION)
-                val fix = attempt(25_000, MetadataProblem.LOCATION_TIMEOUT, MetadataProblem.LOCATION_EMPTY) {
-                    location.locate() ?: throw MetadataFailure(MetadataProblem.LOCATION_EMPTY)
-                }
-                val positionProblem = fix.problem ?: fix.value!!.problem()
-                if (positionProblem != null) {
-                    if (number == 1 && retryable(positionProblem)) {
-                        state = state.copy(problem = positionProblem)
-                        stage(MetadataStage.RETRY)
-                        delay(2_000)
-                        state = state.copy(problem = null)
-                        continue
+                if (point == null) {
+                    stage(MetadataStage.LOCATION)
+                    val fix = attempt(25_000, MetadataProblem.LOCATION_TIMEOUT, MetadataProblem.LOCATION_EMPTY) {
+                        location.locate() ?: throw MetadataFailure(MetadataProblem.LOCATION_EMPTY)
                     }
-                    stop(positionProblem); return
+                    val positionProblem = fix.problem ?: fix.value!!.problem()
+                    if (positionProblem != null) {
+                        if (number == 1 && retryable(positionProblem)) {
+                            state = state.copy(problem = positionProblem)
+                            stage(MetadataStage.RETRY)
+                            delay(2_000)
+                            state = state.copy(problem = null)
+                            continue
+                        }
+                        stop(positionProblem); return
+                    }
+                    point = CoarsePoint.from(fix.value!!) ?: run { stop(MetadataProblem.LOCATION_INVALID); return }
+                    positionAgeAtFetch = fix.value.ageMillis
+                    positionFetchedAt = elapsedMillis()
                 }
-                val point = CoarsePoint.from(fix.value!!) ?: run { stop(MetadataProblem.LOCATION_INVALID); return }
-                if (!active()) return
+                val currentPoint = point ?: return
+                if (!positionActive()) return
                 if (!state.placeSaved && (state.placeProblem == null || retryable(state.placeProblem))) {
                     stage(MetadataStage.PLACE)
                     val name = attempt(3_000, MetadataProblem.PLACE_TIMEOUT, MetadataProblem.PLACE_FAILED) {
-                        place.name(point)?.takeIf { it.isNotBlank() } ?: throw MetadataFailure(MetadataProblem.PLACE_EMPTY)
+                        place.name(currentPoint)?.takeIf { it.isNotBlank() } ?: throw MetadataFailure(MetadataProblem.PLACE_EMPTY)
                     }
                     state = state.copy(placeProblem = name.problem)
-                    if (!active()) return
+                    if (!positionActive()) return
                     if (name.value != null) {
                         stage(MetadataStage.SAVE)
                         if (repository.attachPlace(id, name.value, token) == 0) { stop(MetadataProblem.POST_CHANGED); return }
                         state = state.copy(placeSaved = true)
                     }
                 }
-                if (!active()) return
+                if (!positionActive()) return
                 if (!state.weatherSaved && (state.weatherProblem == null || retryable(state.weatherProblem))) {
                     stage(MetadataStage.WEATHER)
                     val result = attempt(6_000, MetadataProblem.WEATHER_TIMEOUT, MetadataProblem.WEATHER_NETWORK) {
-                        weather.current(point) ?: throw MetadataFailure(MetadataProblem.WEATHER_INVALID)
+                        weather.current(currentPoint) ?: throw MetadataFailure(MetadataProblem.WEATHER_INVALID)
                     }
                     state = state.copy(weatherProblem = result.problem)
-                    if (!active()) return
+                    if (!positionActive()) return
                     val value = result.value
                     if (value != null) {
                         if (abs(value.at.toDouble() - post.createdAt) > 20 * 60_000) {
