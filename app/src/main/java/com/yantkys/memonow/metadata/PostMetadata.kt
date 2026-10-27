@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 // Coordinates are transient: never part of a Room entity or persisted work request.
-data class LocationFix(val latitude: Double, val longitude: Double, val ageMillis: Long, val accuracyMeters: Float)
+data class LocationFix(val latitude: Double, val longitude: Double, val ageMillis: Long, val accuracyMeters: Float, val diagnostic: LocationDiagnostic? = null)
 class CoarsePoint private constructor(val latitude: Double, val longitude: Double) {
     companion object {
         fun from(fix: LocationFix): CoarsePoint? {
@@ -118,6 +118,7 @@ class PostMetadata(
                     val fix = attempt(25_000, MetadataProblem.LOCATION_TIMEOUT, MetadataProblem.LOCATION_EMPTY) {
                         location.locate() ?: throw MetadataFailure(MetadataProblem.LOCATION_EMPTY)
                     }
+                    state = state.copy(location = fix.location ?: fix.value?.diagnostic)
                     val positionProblem = fix.problem ?: fix.value!!.problem()
                     if (positionProblem != null) {
                         if (number == 1 && retryable(positionProblem)) {
@@ -197,7 +198,7 @@ class PostMetadata(
         MetadataProblem.WEATHER_UNAVAILABLE,
     )
 
-    private data class Attempt<T>(val value: T? = null, val problem: MetadataProblem? = null)
+    private data class Attempt<T>(val value: T? = null, val problem: MetadataProblem? = null, val location: LocationDiagnostic? = null)
     private suspend fun <T> attempt(timeout: Long, timedOut: MetadataProblem, failed: MetadataProblem, block: suspend () -> T): Attempt<T> = try {
         Attempt(value = withTimeout(timeout) { block() })
     } catch (_: TimeoutCancellationException) {
@@ -206,7 +207,7 @@ class PostMetadata(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: MetadataFailure) {
-        Attempt(problem = failure.problem)
+        Attempt(problem = failure.problem, location = failure.location)
     } catch (_: SecurityException) {
         Attempt(problem = MetadataProblem.PERMISSION)
     } catch (_: Exception) {

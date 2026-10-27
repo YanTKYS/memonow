@@ -18,7 +18,7 @@ enum class MetadataProblem(val label: String) {
     RESTORE("復元のため終了しました"), CANCELLED("処理を中断しました"),
     POST_CHANGED("投稿の削除・復元により追記できませんでした"), SAVE_FAILED("属性を保存できませんでした"),
 }
-class MetadataFailure(val problem: MetadataProblem) : Exception(problem.name)
+class MetadataFailure(val problem: MetadataProblem, val location: LocationDiagnostic? = null) : Exception(problem.name)
 enum class MetadataStage(val label: String) {
     QUEUED("取得の順番を待っています"), RETRY("一時的な失敗のため再試行を待っています"),
     IDLE("まだ取得していません"), START("取得を開始しました"), LOCATION("位置取得を待機中"),
@@ -32,6 +32,7 @@ data class MetadataDiagnostic(
     val problem: MetadataProblem? = null,
     val placeProblem: MetadataProblem? = null,
     val weatherProblem: MetadataProblem? = null,
+    val location: LocationDiagnostic? = null,
     val placeSaved: Boolean = false,
     val weatherSaved: Boolean = false,
 ) {
@@ -51,6 +52,6 @@ data class MetadataDiagnostic(
             MetadataStage.SAVE -> "終了した段階：DB追記"
             else -> null
         } },
-        placeProblem?.label, weatherProblem?.label,
+        placeProblem?.label, weatherProblem?.label, location?.message,
     ).joinToString("。")
 }
