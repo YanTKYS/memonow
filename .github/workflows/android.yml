@@ -90,6 +90,26 @@ jobs:
           arch: x86_64
           disable-linux-hw-accel: false
           script: ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest
+      - name: Confirm both Android signature tests actually ran
+        env:
+          TEST_API: ${{ matrix.api }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          expected = {
+              "signedApkVerifiesAndItsCertificatesMatchAndroidPackageManager",
+              "modifiedApkIsRejectedEvenWithMatchingDownloadHash",
+          }
+          cases = [case for path in Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml")
+                   for case in ET.parse(path).getroot().iter("testcase")]
+          actual = {case.attrib["name"] for case in cases}
+          assert actual == expected and len(cases) == 2, f"Missing/duplicate runtime tests: {actual}"
+          assert all(not list(case) for case in cases), "Failed or skipped runtime test"
+          print(f"::notice title=Android signature runtime::API {os.environ['TEST_API']}: 2 tests passed, 0 failures/skips; signed APK + signer match + tampered APK rejection")
+          PY
       - name: Upload Android runtime test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -99,4 +119,4 @@ jobs:
             app/build/reports/androidTests/connected/
             app/build/outputs/androidTest-results/connected/
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 1
