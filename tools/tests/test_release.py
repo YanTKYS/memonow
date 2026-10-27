@@ -16,9 +16,9 @@ spec.loader.exec_module(release)
 
 class ReleaseGuards(unittest.TestCase):
     def test_only_matching_tags_or_manual_main_are_eligible(self):
-        release.validate_ref('push', 'refs/tags/v0.1.0', '0.1.0')
+        release.validate_ref('workflow_dispatch', 'refs/heads/main', '0.1.0', 'publish')
         release.validate_ref('workflow_dispatch', 'refs/heads/main', '0.1.0')
-        for event, ref in [('pull_request', 'refs/pull/10/merge'), ('push', 'refs/heads/main'),
+        for event, ref in [('push', 'refs/tags/v0.1.0'), ('pull_request', 'refs/pull/10/merge'), ('push', 'refs/heads/main'),
                            ('workflow_dispatch', 'refs/heads/feature'), ('push', 'refs/tags/v9.0.0')]:
             with self.assertRaises(ValueError):
                 release.validate_ref(event, ref, '0.1.0')
@@ -42,7 +42,7 @@ class ReleaseGuards(unittest.TestCase):
             (root / 'unmerged').write_text('unreviewed')
             git('add', '.')
             git('commit', '-m', 'fixture unmerged commit')
-            env = dict(os.environ, GITHUB_EVENT_NAME='push', GITHUB_REF='refs/tags/v0.1.0', GITHUB_OUTPUT=str(root / 'output'))
+            env = dict(os.environ, GITHUB_EVENT_NAME='push', GITHUB_REF='refs/tags/v0.1.0', GITHUB_OUTPUT=str(root / 'output'), GITHUB_STEP_SUMMARY=str(root / 'summary'), RELEASE_MODE='preview')
             result = subprocess.run(['python3', str(ROOT / 'tools/release.py'), 'check-ref'], cwd=root, env=env, capture_output=True, text=True)
             self.assertNotEqual(0, result.returncode)
             self.assertFalse((root / 'output').exists())
@@ -63,12 +63,12 @@ class ReleaseGuards(unittest.TestCase):
                     release.version(path)
 
     def test_draft_notes_allow_manual_candidate_but_block_tag_publication(self):
-        release.validate_notes('workflow_dispatch', '<!-- release-status: draft -->')
-        release.validate_notes('push', '<!-- release-status: ready -->\n# v0.1.0')
+        release.validate_notes('preview', '<!-- release-status: draft -->')
+        release.validate_notes('publish', '<!-- release-status: ready -->\n# v0.1.0')
         with self.assertRaises(ValueError):
-            release.validate_notes('push', '<!-- release-status: draft -->')
+            release.validate_notes('publish', '<!-- release-status: draft -->')
         with self.assertRaises(ValueError):
-            release.validate_notes('push', 'not ready')
+            release.validate_notes('publish', 'not ready')
 
     def test_certificate_normalization_and_invalid_pins(self):
         self.assertEqual('aa' * 32, release.fingerprint(':'.join(['AA'] * 32)))

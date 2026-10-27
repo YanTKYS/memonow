@@ -1,20 +1,25 @@
 name: Signed release APK
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'preview = テスト候補（未公開Draft） / publish = 正式公開'
+        type: choice
+        required: true
+        default: preview
+        options: [preview, publish]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-memonow
   cancel-in-progress: false
 
 jobs:
   validate:
-    if: github.repository == 'YanTKYS/memonow' && (github.event_name == 'push' || github.ref == 'refs/heads/main')
+    if: github.repository == 'YanTKYS/memonow' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
@@ -26,7 +31,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Require matching tag and a commit already on main
+      - name: Validate main, mode, readiness and absence of official tag/release
+        env:
+          RELEASE_MODE: ${{ inputs.mode }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         id: ref
         run: python3 tools/release.py check-ref
       - name: Test release guards
@@ -42,6 +51,8 @@ jobs:
 
   sign:
     needs: validate
+    outputs:
+      certificate: ${{ steps.verify.outputs.certificate }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Put keys only in this protected environment, with required reviewers and
@@ -67,6 +78,7 @@ jobs:
           MEMONOW_RELEASE_CERT_SHA256: ${{ vars.MEMONOW_RELEASE_CERT_SHA256 }}
         run: python3 tools/prepare-signing.py
       - name: Build and verify signed release
+        id: verify
         env:
           MEMONOW_RELEASE_STORE_PASSWORD: ${{ secrets.MEMONOW_RELEASE_STORE_PASSWORD }}
           MEMONOW_RELEASE_KEY_ALIAS: ${{ secrets.MEMONOW_RELEASE_KEY_ALIAS }}
@@ -76,6 +88,7 @@ jobs:
         run: |
           ./gradlew --no-daemon --no-configuration-cache assembleRelease lintRelease
           python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-release.apk
+          python3 -c 'import os; from tools.release import fingerprint; print("certificate=" + fingerprint(os.environ["MEMONOW_RELEASE_CERT_SHA256"]))' >> "$GITHUB_OUTPUT"
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk "dist/memonow-v${VERSION}.apk"
           (cd dist && sha256sum "memonow-v${VERSION}.apk" > "memonow-v${VERSION}.apk.sha256")
@@ -92,51 +105,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  preview:
-    # Manually signed candidates go to an unpublished Draft Release for Android testing.
-    if: github.event_name == 'workflow_dispatch'
+  distribute:
+    name: '${{ inputs.mode }} — Draft候補 / 正式公開'
     needs: [validate, sign]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Download verified signed APK
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: signed-release-${{ needs.validate.outputs.version }}
-          path: dist
-      - name: Create Draft Release for device testing
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          VERSION: ${{ needs.validate.outputs.version }}
-          COMMIT: ${{ needs.validate.outputs.commit }}
-        run: |
-          set -euo pipefail
-          (cd dist && sha256sum -c "memonow-v${VERSION}.apk.sha256")
-          # test-v* names never trigger the final v* publication workflow.
-          TAG="test-v${VERSION}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}"
-          URL=$(gh release create "$TAG" \
-            "dist/memonow-v${VERSION}.apk" \
-            "dist/memonow-v${VERSION}.apk.sha256" \
-            --draft --prerelease --latest=false --target "$COMMIT" \
-            --title "memonow v${VERSION} (device test #${GITHUB_RUN_ID})" \
-            --notes "Unpublished signed APK for Android device tests. Run: ${GITHUB_RUN_ID}, attempt: ${GITHUB_RUN_ATTEMPT}, commit: ${COMMIT}. Not an official release. Sign in with a repository maintainer account to download. Keep a JSON backup before changing installations.")
-          {
-            echo "### Unpublished Android test APK"
-            echo "Signed APK and SHA-256 are in a **Draft Release** (not public)."
-            echo ""
-            echo "[Open Draft Release and download APK](${URL})"
-            echo ""
-            echo "If the link does not open on your phone, sign in with a repository maintainer account."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [validate, sign]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -144,16 +117,22 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install verification SDK
+        run: JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0"
+      - name: Download verified files from this run only
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: signed-release-${{ needs.validate.outputs.version }}
           path: dist
-      - name: Verify files and publish only after assets are attached
+      - name: Verify uploaded APK and finish selected mode
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          (cd dist && sha256sum -c "memonow-v${VERSION}.apk.sha256")
-          gh release create "$TAG" "dist/memonow-v${VERSION}.apk" "dist/memonow-v${VERSION}.apk.sha256" --verify-tag --draft --title "memonow $TAG" --notes-file "docs/releases/$TAG.md"
-          gh release edit "$TAG" --draft=false
+          GH_REPO: ${{ github.repository }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          PUBLIC_CERT_SHA256: ${{ needs.sign.outputs.certificate }}
+        run: python3 tools/distribute.py
