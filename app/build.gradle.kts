@@ -92,3 +92,8 @@ kapt {
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     dependsOn(requireReleaseSigning)
 }
+
+// Android 16 / API 36 Robolectric requires Java 21; app bytecode stays Java 17.
+tasks.withType<Test>().configureEach {
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
+}
