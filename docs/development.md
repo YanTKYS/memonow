@@ -99,4 +99,3 @@ adb shell am start -n com.yantkys.memonow/.MainActivity
 ```
 
 手動の確認項目は[テストガイド](testing.md)を参照してください。APKをファイル転送して開く場合は、そのファイル管理アプリからの「不明なアプリのインストール」を一時的に許可します。
-
