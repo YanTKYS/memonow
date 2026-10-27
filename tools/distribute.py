@@ -8,7 +8,7 @@ import re
 import subprocess
 import tempfile
 import sys
-from release import version, validate_ref, validate_notes, verify_apk, fingerprint
+from release import version, validate_ref, verify_apk, fingerprint
 
 
 def gh(*args):
@@ -66,7 +66,13 @@ def distribute(mode, commit, certificate):
     if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != commit:
         raise ValueError('Checkout differs from validated commit')
     notes = Path(f'docs/releases/v{name}.md').read_text()
-    validate_notes(mode, notes)
+    if not notes.strip():
+        raise ValueError('Release notes are empty')
+    if mode == 'publish':
+        from release_plan import require_merge, decide
+        require_merge(commit)
+        if decide(name, code)[0] != 'release':
+            raise ValueError('Version already published during this run; do not republish')
     apk, checksum, digest = check_files(Path('dist'), name)
     certificate = fingerprint(certificate)
     verify_apk(apk, name, code, certificate, os.environ['ANDROID_HOME'])
@@ -111,7 +117,7 @@ def distribute(mode, commit, certificate):
         if api(endpoint('git/ref/tags/' + tag))['object']['sha'] != commit:
             raise ValueError('Tag changed before publication')
         api(endpoint('releases/' + str(created['id'])), 'PATCH', {'draft': False, 'make_latest': 'true'})
-        summary('正式公開済み')
+        summary('release — 正式公開済み')
     else:
         summary('テスト候補・未公開Draft（publishは選択されていません）')
 

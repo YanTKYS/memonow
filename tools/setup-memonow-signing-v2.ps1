@@ -247,7 +247,7 @@ try {
     Write-Host '次の手順（勝手にリリースは実行しません）:' -ForegroundColor Cyan
     Write-Host '1. GitHub Actions → Signed release APK → Run workflow → main を手動実行する。'
     Write-Host '2. 生成された候補APKを実機で検証し、JSON保存／復元と将来の上書き更新を確かめる。'
-    Write-Host '3. docs/RELEASE_CHECKLIST.mdを完了後、リリースノートをreadyに変更してタグを作成する。'
+    Write-Host '3. バージョン・ノート・確認記録を含むPRをレビューし、オーナーがmainへマージするとActionsが自動公開する。'
     Write-Host '重要: debug版から正式署名版へ上書きできない場合があります。アンインストール前にJSONを検証してください。'
 }
 finally {

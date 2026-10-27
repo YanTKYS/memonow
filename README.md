@@ -227,8 +227,7 @@ Android StudioではAPI 26以上の端末・エミュレーターを選んでRun
 2026-10-27のユーザー報告で、署名付きAPKの投稿・保存、位置・天気の連続付与、JSON保存・復元が成功しました。
 [公開前チェックリスト](docs/RELEASE_CHECKLIST.md) に、CIの証跡と未確認項目を分けて記録しています。
 鍵の別媒体保管、同一署名での更新とデータ保持、既存データの退避は、チェックリストに確認状況を残してください。
-v0.1.0は公開済みで、タグ・Releaseを差し替えません。次版の[ノート](docs/releases/v0.1.1.md)はdraftです。
-[本版の確認記録](docs/RELEASE_CHECKLIST_v0.1.1.md)で実機確認・公開判断を記録してからready化し、ユーザーがActionsでpublishを選びます。
+v0.1.0は公開済みで、タグ・Releaseを差し替えません。次版の[ノート](docs/releases/v0.1.1.md)と[確認記録](docs/RELEASE_CHECKLIST_v0.1.1.md)をPRに含めます。レビュー後のオーナーによるmainへのマージを公開承認とし、Actionsが自動公開します。実機更新と成功率は未確認です。
 
 ### 鍵を一度だけ生成し、安全に保管する
 
@@ -253,7 +252,7 @@ keytool -list -v -keystore "$HOME/.memonow-signing/memonow-release.jks" -alias m
 
 リポジトリのSettings → Environmentsで **release-signing** を作成し、先に次の保護を設定します。
 
-- 必須レビュアーを設定し、可能なら自己承認を防ぎます。手動候補ビルドはレビュー済みmain、publish時は実機チェック完了を確認して承認します。
+- mainのPRレビューとオーナーのマージを公開承認にします。Environmentはmainからの署名に限定します。Required reviewers等の追加承認待ちを設定している場合は、マージ承認に一本化する運用と初回に整合させてください。毎回の追加承認操作は通常手順に含めません。
 - Deployment branches/tagsをmainブランチと意図した`v*`タグに限定します。mainとタグの作成・更新・削除権限もRulesets等で保護し、未レビューの変更を通さない運用にしてください。
 - 以下の秘密情報は**Environment Secrets**へ入れます。PRや任意ブランチから利用可能なRepository/Organization Secretsとして保存しないでください。
 
@@ -293,33 +292,37 @@ python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-rele
 検証時に`--debug`・`--info`・`--scan`等で署名設定をログ/外部サービスへ出さないでください。作業後は秘密の環境変数を解除します。
 鍵を渡す設定は通常のdebug開発環境に保存しません。
 
-### Actionsからテスト候補／正式公開を選ぶ
+### PRマージから正式公開
 
-1. 実装担当がversion・リリースノート・確認記録を公開準備PRに揃えます。公開前確認を踏まえ、公開可能な版だけノート先頭を `release-status: ready` にします。ユーザーはPRを確認してマージします。
-2. GitHub **Actions → Signed release APK → Run workflow** でブランチ **main** とモードを選び、1回実行します。
-   - **preview**（初期値）：テスト用APKとSHA-256を未公開Draft Releaseへ置きます。正式タグ・公開Releaseは作りません。スマートフォンでは管理者アカウントでログインして取得してください。
-   - **publish**：正式公開への最終承認です。テスト・署名検証後、CIが検証済みコミットへ `v<versionName>` タグを作成し、同じ実行のAPKをDraftへ添付して再検証し、最後に公開します。ユーザーのタグ入力・CLI操作・Draft解除操作は不要です。
-3. Summaryでモード、version/code、commit、Release URL、公開／未公開状態、APK SHA-256を確認し、取得した成果物を照合してください。テスト候補と正式版が同一バイナリとは保証しません。
+1. 実装担当が機能の検証、`version.properties` の更新、対応する `docs/releases/vX.Y.Z.md`、確認記録までPRに揃えます。バージョン更新は公開意図です。PR説明にマージで公開される版と未確認事項を記載します。
+2. ChatGPTがレビューし、オーナー **YanTKYS** がmainへマージします。これが最終の公開承認です。
+3. mainのpushでActionsがマージ元PR・オーナー・commitと版を軽量判定します。未公開の新しい版だけテスト・ビルド・署名・正式タグ作成・Release公開へ進みます。同じ公開版の追加PRは `skip` となり、署名・配布ビルドを行いません。
+4. Summaryの `release` / `skip` / `failed`、バージョン、commit、タグ、URL、APK SHA-256を確認します。取得したAPKのチェックサム・証明書も確認してください。
 
-旧[run 40448583861](https://github.com/YanTKYS/memonow/actions/runs/40448583861)は、従来の手動候補作成が成功し、タグpush専用のpublishがskippedになった実行です。successは正式公開を意味しませんでした。
-新方式ではタグpushを起動条件から外し、主経路をmainでの明示的手動実行に一本化します。GITHUB_TOKENによるタグ作成が別実行を起動しない性質にも依存せず、再公開の連鎖を防ぎます。
-readyだけ、mainへのpushだけ、タグpushだけでは公開しません。draft・別ブランチ・不正modeは署名前に拒否します。
+ノートの状態フラグ、手動タグ、手動publishは不要です。mainへの直接push・別ブランチ・PRイベント・タグpushでは正式公開しません。
+公開用APKは同じ実行の署名検証済みファイルだけを使用し、内部で一時Draftへ添付して再ダウンロード・検証した後に公開します。途中のDraft解除操作も不要です。
+任意でActionsの **Signed release APK → Run workflow → main** を実行すると、未公開のテスト候補（preview）だけを作れます。通常公開の前提ではありません。
 
-鍵とパスワードの別媒体保管・読み出し確認は初回と鍵変更時に行い、その記録を保ちます。
-版ごとには既存データのJSON退避、更新時のデータ保持、候補からの移行と確認記録を見直します。毎回鍵を作り直しません。
-公開済み0.1.0 / code 1から、次版0.1.1 / code 2へ同一署名で更新します。
-詳細は[必須残確認](docs/RELEASE_CHECKLIST.md#公開前の必須残確認)を参照してください。
-次版はcode 2 / name 0.1.1と対応するノートを準備済みです。公開済みcodeを再利用しません。
+本方式の導入PRは、既にmainにある **0.1.1 / code 2** をそのマージ後に自動公開する公開対象PRです。0.1.0のタグ・Releaseやtest-v*の未公開候補は変更しません。
+0.1.1の実機での更新・位置天気の成功率は未確認です。既存データをJSONに退避し、同一署名の上書きとデータ保持を公開後にも確認してください。未確認を成功と推定しません。
+鍵・パスワードの別媒体保管と読み出し確認は初回／鍵変更時、データ保全と更新互換性の確認記録は版ごとに管理します。
+
+### 初回のGitHub保護設定
+
+release-signing Environmentと署名Secretsは維持します。確認時点のEnvironmentはbranch policyだけで追加レビュアー待ちはありません。
+Rulesets一覧は空、従来のmainブランチ保護APIは403で詳細を確認できませんでした。設定は変更していません。
+オーナーはGitHub Settings → Rules → RulesetsでmainにPR必須、必要なレビューとAndroid CI、強制push・削除の禁止、管理者を含む迂回制限を設定してください。
+自動公開側でも「オーナーがmainへマージしたPRのmerge commit」をAPIで照合し、通常の直接pushを拒否します。保護設定はこの検査の代わりではなく、Workflow自体の未レビュー変更を防ぐためにも必要です。
 
 ### 重複実行・途中失敗の回復
 
-全リリース実行は共通concurrencyで直列化します。publishは署名前と公開直前に正式タグ・Release（未公開Draftを含む）の存在を検査します。
+全リリース実行は共通concurrencyで直列化します。自動公開は署名前と公開直前に正式タグ・Release（未公開Draftを含む）の存在を検査します。
 既存オブジェクトがあれば同じコミットでも停止し、自動上書き・削除・タグ付け替え・既存Draftの公開はしません。
-成功後の再実行も同じ版では停止します。previewの再実行はrun/attempt別の新しい未公開Draftを作ります。
+成功後の再実行・同一版の後続PRはskipとなり再公開しません。previewの再実行はrun/attempt別の新しい未公開Draftを作ります。
 
 失敗時はSummaryと該当runを確認してください。
-- タグ／Draftがまだない場合：ネットワーク・権限・署名失敗を修復して再実行できます。
-- タグだけ、または未公開Draftと途中のassetsが残った場合：そのcommit・証明書・assets・失敗段階を管理者が確認します。本実装は自動再開しません。原則は修正と新しいバージョンのPRを準備します。同じ版で再試行が必要なら、未公開であることを確認した管理者が残存Draft／タグの整理を個別に判断し、整理後に改めてpublishを承認します。
+- タグ／Draftがまだない場合：ネットワーク・権限・署名失敗を修復して、承認済みマージのrunを再実行できます。
+- タグだけ、または未公開Draftと途中のassetsが残った場合：そのcommit・証明書・assets・失敗段階を管理者が確認します。本実装は自動再開しません。原則は修正と新しいバージョンのPRを準備します。同じ版で再試行が必要なら、未公開であることを確認した管理者が残存Draft／タグの整理を個別に判断し、整理後、オーナーが承認したマージの失敗runを再実行します。
 - 公開済み、または公開PATCHの結果が不明な場合：まずReleaseの公開状態を確認し、既に公開されていれば再配布・削除でやり直さず、修正は次版にします。
 
 署名ジョブはreadのみ、タグ／Releaseを扱うdistributeジョブだけがcontents:writeを持ちます。秘密鍵・署名パスワードはdistributeへ渡しません。

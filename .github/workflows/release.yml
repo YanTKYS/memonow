@@ -1,44 +1,52 @@
 name: Signed release APK
-run-name: '${{ inputs.mode }} / ${{ github.ref_name }} — Signed release APK'
+run-name: "${{ github.event_name == 'push' && 'release / skip' || 'preview' }} / ${{ github.ref_name }}"
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'preview = テスト候補（未公開Draft） / publish = 正式公開'
-        type: choice
-        required: true
-        default: preview
-        options: [preview, publish]
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: release-memonow
   cancel-in-progress: false
 
 jobs:
-  validate:
-    if: github.repository == 'YanTKYS/memonow' && github.event_name == 'workflow_dispatch'
+  plan:
+    if: github.repository == 'YanTKYS/memonow'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
     outputs:
-      version: ${{ steps.ref.outputs.version }}
-      code: ${{ steps.ref.outputs.code }}
-      commit: ${{ steps.ref.outputs.commit }}
+      action: ${{ steps.plan.outputs.action }}
+      mode: ${{ steps.plan.outputs.mode }}
+      version: ${{ steps.plan.outputs.version }}
+      code: ${{ steps.plan.outputs.code }}
+      commit: ${{ steps.plan.outputs.commit }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: Validate main, mode, readiness and absence of official tag/release
+      - name: Determine release, skip or optional preview without secrets
+        id: plan
         env:
-          RELEASE_MODE: ${{ inputs.mode }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        id: ref
-        run: python3 tools/release.py check-ref
+        run: python3 tools/release_plan.py
+
+  validate:
+    needs: plan
+    if: needs.plan.outputs.action != 'skip'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Test release guards
         run: python3 -m unittest discover -s tools/tests -v
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -51,7 +59,7 @@ jobs:
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug lintDebug
 
   sign:
-    needs: validate
+    needs: [plan, validate]
     outputs:
       certificate: ${{ steps.verify.outputs.certificate }}
     runs-on: ubuntu-24.04
@@ -62,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -85,7 +93,7 @@ jobs:
           MEMONOW_RELEASE_KEY_ALIAS: ${{ secrets.MEMONOW_RELEASE_KEY_ALIAS }}
           MEMONOW_RELEASE_KEY_PASSWORD: ${{ secrets.MEMONOW_RELEASE_KEY_PASSWORD }}
           MEMONOW_RELEASE_CERT_SHA256: ${{ vars.MEMONOW_RELEASE_CERT_SHA256 }}
-          VERSION: ${{ needs.validate.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           ./gradlew --no-daemon --no-configuration-cache assembleRelease lintRelease
           python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-release.apk
@@ -99,7 +107,7 @@ jobs:
       - name: Upload only verified public release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: signed-release-${{ needs.validate.outputs.version }}
+          name: signed-release-${{ needs.plan.outputs.version }}
           path: |
             dist/*.apk
             dist/*.apk.sha256
@@ -107,8 +115,8 @@ jobs:
           retention-days: 1
 
   distribute:
-    name: ${{ inputs.mode == 'publish' && '正式版を公開する' || 'テスト候補を未公開Draftに置く' }}
-    needs: [validate, sign]
+    name: ${{ needs.plan.outputs.mode == 'publish' && '正式版を公開する' || 'テスト候補を未公開Draftに置く' }}
+    needs: [plan, validate, sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -116,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
@@ -127,13 +135,23 @@ jobs:
       - name: Download verified files from this run only
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: signed-release-${{ needs.validate.outputs.version }}
+          name: signed-release-${{ needs.plan.outputs.version }}
           path: dist
       - name: Verify uploaded APK and finish selected mode
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_MODE: ${{ inputs.mode }}
-          COMMIT: ${{ needs.validate.outputs.commit }}
+          RELEASE_MODE: ${{ needs.plan.outputs.mode }}
+          COMMIT: ${{ needs.plan.outputs.commit }}
           PUBLIC_CERT_SHA256: ${{ needs.sign.outputs.certificate }}
         run: python3 tools/distribute.py
+
+  report-failure:
+    needs: [plan, validate, sign, distribute]
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report failed release pipeline
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: echo "## failed — v${VERSION} — inspect failed job and any existing tag/Draft before retrying" >> "$GITHUB_STEP_SUMMARY"

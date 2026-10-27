@@ -9,7 +9,11 @@ import sys
 
 
 def version(root=Path('.')):
-    props = dict(line.strip().split('=', 1) for line in (root / 'version.properties').read_text().splitlines()
+    return parse_version((root / 'version.properties').read_text())
+
+
+def parse_version(text):
+    props = dict(line.strip().split('=', 1) for line in text.splitlines()
                  if line.strip() and not line.lstrip().startswith('#'))
     name, code = props['versionName'], props['versionCode']
     if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', name):
@@ -20,13 +24,8 @@ def version(root=Path('.')):
 
 
 def validate_ref(event, ref, name, mode='preview'):
-    if event != 'workflow_dispatch' or ref != 'refs/heads/main' or mode not in ('preview', 'publish'):
-        raise ValueError('Release requires manual execution on main with preview or publish mode')
-
-
-def validate_notes(mode, text):
-    if mode == 'publish' and text.partition('\n')[0].strip() != '<!-- release-status: ready -->':
-        raise ValueError('Publish requires release notes marked ready in the reviewed preparation PR')
+    if ref != 'refs/heads/main' or (event, mode) not in (('push', 'publish'), ('workflow_dispatch', 'preview')):
+        raise ValueError('Release requires main PR merge push; manual execution is preview only')
 
 
 def fingerprint(value):
@@ -71,7 +70,6 @@ def main():
         notes = Path('docs/releases') / ('v' + name + '.md')
         if not notes.is_file():
             raise ValueError('Versioned release notes are missing')
-        validate_notes(mode, notes.read_text())
         if mode == 'publish':
             from distribute import ensure_absent
             ensure_absent('v' + name)
