@@ -28,12 +28,12 @@ class UpdateViewModelTest {
     private lateinit var store: ViewModelStore
     @Before fun setUp() { resetUpdateProviderCache(); store=ViewModelStore(); Dispatchers.setMain(UnconfinedTestDispatcher()); File(context.cacheDir,"updates").deleteRecursively() }
     @After fun close() { store.clear(); Dispatchers.resetMain(); File(context.cacheDir,"updates").deleteRecursively() }
-    private fun model(source: UpdateSource, verifier: (File,ReleaseUpdate,InstalledApp)->Unit = {_,_,_->}): UpdateViewModel {
+    private fun model(source: UpdateSource, key: String = "main", available: (File)->Long = { it.usableSpace }, verifier: (File,ReleaseUpdate,InstalledApp)->Unit = {_,_,_->}): UpdateViewModel {
         val factory=object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST") override fun <T: androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T =
-                UpdateViewModel(context,source,verifier, { installed }) as T
+                UpdateViewModel(context,source,verifier, { installed }, available) as T
         }
-        return ViewModelProvider(store,factory)[UpdateViewModel::class.java]
+        return ViewModelProvider(store,factory).get(key,UpdateViewModel::class.java)
     }
     private fun source(version: String = "0.1.4") = object : UpdateSource {
         override suspend fun latest()=release.copy(versionName=version)
@@ -79,14 +79,14 @@ class UpdateViewModelTest {
         assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION,launched!!.flags)
         assertEquals(launched!!.data,launched!!.clipData!!.getItemAt(0).uri)
         model.close() // A returned/cancelled OS installer may still be reading this file.
-        assertTrue(File(context.cacheDir,"updates/ready/update.apk").isFile)
+        assertTrue(File(context.cacheDir,"updates/ready").walkTopDown().any { it.isFile })
     }
     @Test fun verificationFailureNeverMakesInstallableFile() = runTest {
         val model=model(source()) { _,_,_->throw UpdateFailure("署名不一致") }
         model.check();idle(model);model.download();idle(model)
         assertFalse(model.state.value.ready)
-        assertFalse(File(context.cacheDir,"updates/download.part").exists())
-        assertFalse(File(context.cacheDir,"updates/ready/update.apk").exists())
+        assertFalse(File(context.cacheDir,"updates").walkTopDown().any { it.isFile && it.extension == "part" })
+        assertFalse(File(context.cacheDir,"updates/ready").walkTopDown().any { it.isFile })
         model.install { fail("must not launch") }
     }
     @Test fun interruptedDownloadDeletesPartialFileAndCannotLaunchInstaller() = runTest {
@@ -99,7 +99,7 @@ class UpdateViewModelTest {
         })
         model.check();idle(model);model.download();entered.await();model.cancel();idle(model)
         assertFalse(model.state.value.ready)
-        assertFalse(File(context.cacheDir,"updates/download.part").exists())
+        assertFalse(File(context.cacheDir,"updates").walkTopDown().any { it.isFile && it.extension == "part" })
         model.install { fail("must not launch") }
     }
     @Test fun permissionSettingsFailureAndOfflineCheckAreRecoverable() = runTest {
@@ -114,16 +114,35 @@ class UpdateViewModelTest {
         assertTrue(model.state.value.message.contains("開けません"))
     }
     @Test fun insufficientSpacePreventsDownloadAndInstaller() = runTest {
-        val model=UpdateViewModel(context,source(),{_,_,_->fail("must not verify")},{installed},{0})
+        val model=model(source(),available={0}) {_,_,_->fail("must not verify")}
         model.check();idle(model);model.download();idle(model)
         assertTrue(model.state.value.message.contains("空き容量"))
         assertFalse(model.state.value.ready)
         model.install { fail("must not install") }
     }
+    @Test fun independentScreensDoNotOverwriteOrCleanEachOthersFiles() = runTest {
+        val entered=CompletableDeferred<Unit>()
+        val finish=CompletableDeferred<Unit>()
+        val first=model(object:UpdateSource {
+            override suspend fun latest()=release
+            override suspend fun download(release:ReleaseUpdate,file:File,progress:(Long)->Unit) {
+                file.writeBytes(ByteArray(8));entered.complete(Unit);finish.await()
+            }
+        },key="first") {file,_,_->assertTrue(file.exists())}
+        first.check();idle(first);first.download();entered.await()
+        val second=model(source(),key="second")
+        assertEquals(1,File(context.cacheDir,"updates").walkTopDown().count { it.isFile && it.extension=="part" })
+        second.check();idle(second);second.download();idle(second);second.close()
+        assertEquals(1,File(context.cacheDir,"updates").walkTopDown().count { it.isFile && it.extension=="part" })
+        finish.complete(Unit);idle(first)
+        assertTrue(first.state.value.ready)
+        assertEquals(1,File(context.cacheDir,"updates/ready").walkTopDown().count { it.isFile })
+        first.close()
+    }
     @Test fun failedCheckAndClosingBeforeHandoffClearReadyState() = runTest {
         val model=model(source())
         model.check();idle(model);model.download();idle(model)
         assertTrue(model.state.value.ready);model.close();assertFalse(model.state.value.ready)
-        assertFalse(File(context.cacheDir,"updates/ready/update.apk").exists())
+        assertFalse(File(context.cacheDir,"updates/ready").walkTopDown().any { it.isFile })
     }
 }

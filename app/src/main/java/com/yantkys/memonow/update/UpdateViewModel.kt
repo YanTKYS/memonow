@@ -29,15 +29,17 @@ class UpdateViewModel @JvmOverloads constructor(app: Application,
 ) : AndroidViewModel(app) {
     val installed = identity()
     private val folder = File(app.cacheDir, "updates")
-    private val part = File(folder, "download.part")
-    private val ready = File(folder, "ready/update.apk")
+    private val session = java.util.UUID.randomUUID().toString()
+    private val part = File(folder, "$session.part")
+    private val ready = File(folder, "ready/$session.apk")
     private val _state = MutableStateFlow(UpdateState())
     val state = _state.asStateFlow()
     private var job: Job? = null
     private var handedOff = false
     init {
-        part.delete()
-        if (System.currentTimeMillis() - ready.lastModified() > 24 * 60 * 60_000L) ready.delete()
+        activeSessions.add(session)
+        folder.listFiles()?.filter { it.isFile && it.extension == "part" && it.nameWithoutExtension !in activeSessions }?.forEach { it.delete() }
+        File(folder, "ready").listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 24 * 60 * 60_000L }?.forEach { it.delete() }
     }
     fun check() = operate {
         ready.delete(); handedOff = false
@@ -121,5 +123,8 @@ class UpdateViewModel @JvmOverloads constructor(app: Application,
             } catch (_: Exception) { throw UpdateFailure("インストーラーを開けません。正式Releaseの案内を確認してください。") }
         }
     }
-    override fun onCleared() { if (!handedOff) ready.delete(); part.delete(); super.onCleared() }
+    override fun onCleared() { if (!handedOff) ready.delete(); part.delete(); activeSessions.remove(session); super.onCleared() }
+    companion object {
+        private val activeSessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    }
 }
