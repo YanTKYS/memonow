@@ -12,6 +12,7 @@
 | Kotlin / Compose Compiler plugin | 2.2.21 |
 | Compose BOM | 2025.10.00 |
 | Activity Compose | 1.11.0 |
+| APK署名の検証 | apksig 8.13.2（アプリ内更新） |
 | Room | 2.8.3（Kotlin kaptでDAO生成） |
 | Lifecycle | 2.9.4 |
 | テスト | JUnit 4.13.2 / Robolectric 4.16.1 / Coroutines Test 1.10.2 |
