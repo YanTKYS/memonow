@@ -27,6 +27,14 @@ GitHubの固定リポジトリの公開済み正式Releaseを匿名で照会し�
 投稿・座標・履歴・Secretsは送信しません。GitHubと配布ホストには通常の通信に伴うIPアドレス等が伝わります。
 APIレート制限・404・資産不備・容量不足・通信中断・検証不一致は更新を中止し、未検証APKをOSへ渡しません。
 
+### 署名検証ライブラリの対応範囲
+
+`apksig 8.13.2`は[上流README](https://android.googlesource.com/platform/tools/apksig/+/refs/heads/main/README.md)で端末外向けとされており、Android上での公式サポートを意味しません。APKの署名を暗号学的に検証し、現在の署名証明書と照合する目的で版を固定して採用しています。OSインストーラーによる最終検証も必要です。
+
+互換性はJVMテストと分け、CIの`APK signature on Android API 26/36`でAndroidプロセス内のinstrumented testを実行します。インストール済みdebug APKのコピーを実際の`ApkVerifier.verify()`と製品の`UpdateVerifier`に渡し、検証成功とPackageManagerが返す署名証明書との一致を検査します。署名対象の1バイトを変更し、SHA-256を計算し直したAPKも拒否することを検査します。
+
+この確認はAPI 26/36のGoogle APIs x86_64エミュレーターが対象です。中間API・すべてのOEM端末の保証や、OSインストール完了の確認ではありません。ライブラリ更新時もこのCIを実行し、未確認の版へ自動更新しません。テストはCI用debug署名だけを使い、正式署名鍵・実利用の記録・正式版の上書き更新を必要としません。
+
 ## 導入時の制限と確認
 
 この機能はv0.1.3以降です。既存v0.1.2からv0.1.3へは[正式Release](https://github.com/YanTKYS/memonow/releases/latest)から手動更新します。
