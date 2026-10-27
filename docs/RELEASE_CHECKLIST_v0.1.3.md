@@ -6,6 +6,16 @@
 自動テストではAPI 26/36でメタデータ・転送先・取得上限・HTTP失敗/中断、実署名APKの検証と改ざん/別署名/版の拒否、FileProviderの限定範囲、許可設定とOS引き渡しIntent、失敗後の一時ファイル整理を確認します。
 これは実端末のOSインストール完了の証拠ではありません。既存の投稿・位置天気・JSON回帰も自動テストで維持します。
 
+## Androidランタイムの署名検証
+
+2026-10-28（JST）、commit `0593ce2`の[PR CI](https://github.com/YanTKYS/memonow/actions/runs/40532893623)でAPI 26/36の両方のinstrumented testが成功しました。Google APIs x86_64エミュレーターのAndroidプロセス内で、インストール済みdebug署名APKのコピーを`ApkVerifier`と製品の`UpdateVerifier`へ渡しています。
+
+- 正しい署名の検証と証明書の取得が成功し、実PackageManagerのインストール済み証明書と一致
+- APKの署名対象バイトを変更し、取得ハッシュを再計算しても署名検証で拒否
+- 正式署名鍵・投稿DB・実利用端末を使わず、OSによる上書きインストールも実行しない
+
+以降のPR CIでも両APIでこの2件の実行・成功・スキップなしを必須にし、結果通知と`signature-runtime-api-*` artifactを残します。`apksig`は上流では端末外向けであり、全API/OEMの公式互換保証ではありません。[採用理由と制限](updating.md#署名検証ライブラリの対応範囲)を参照してください。
+
 ## 実機での確認（未実施）
 
 - 端末・Android版・確認日・APK SHA-256・証明書：要確認
