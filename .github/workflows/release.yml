@@ -1,4 +1,5 @@
 name: Signed release APK
+run-name: '${{ inputs.mode }} / ${{ github.ref_name }} — Signed release APK'
 
 on:
   workflow_dispatch:
@@ -106,7 +107,7 @@ jobs:
           retention-days: 1
 
   distribute:
-    name: '${{ inputs.mode }} — Draft候補 / 正式公開'
+    name: ${{ inputs.mode == 'publish' && '正式版を公開する' || 'テスト候補を未公開Draftに置く' }}
     needs: [validate, sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
