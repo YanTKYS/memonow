@@ -29,6 +29,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
       - name: Test release guards without secrets
         run: python3 -m unittest discover -s tools/tests -v
+      - name: Validate workflow YAML and expressions
+        run: bash tools/check-workflows.sh
       - name: Build and lint debug app
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug lintDebug
       - name: Upload debug APK

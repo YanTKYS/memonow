@@ -19,17 +19,14 @@ def version(root=Path('.')):
     return name, int(code)
 
 
-def validate_ref(event, ref, name):
-    if event == 'workflow_dispatch' and ref == 'refs/heads/main':
-        return
-    if event == 'push' and ref == 'refs/tags/v' + name:
-        return
-    raise ValueError('Release requires a matching version tag or manual execution on main')
+def validate_ref(event, ref, name, mode='preview'):
+    if event != 'workflow_dispatch' or ref != 'refs/heads/main' or mode not in ('preview', 'publish'):
+        raise ValueError('Release requires manual execution on main with preview or publish mode')
 
 
-def validate_notes(event, text):
-    if event == 'push' and text.partition('\n')[0].strip() != '<!-- release-status: ready -->':
-        raise ValueError('Release notes must be marked ready only after device checks')
+def validate_notes(mode, text):
+    if mode == 'publish' and text.partition('\n')[0].strip() != '<!-- release-status: ready -->':
+        raise ValueError('Publish requires release notes marked ready in the reviewed preparation PR')
 
 
 def fingerprint(value):
@@ -67,15 +64,22 @@ def main():
     args = parser.parse_args()
     name, code = version()
     if args.command == 'check-ref':
-        validate_ref(os.environ.get('GITHUB_EVENT_NAME'), os.environ.get('GITHUB_REF'), name)
+        mode = os.environ.get('RELEASE_MODE', 'preview')
+        validate_ref(os.environ.get('GITHUB_EVENT_NAME'), os.environ.get('GITHUB_REF'), name, mode)
         subprocess.run(['git', 'merge-base', '--is-ancestor', 'HEAD', 'refs/remotes/origin/main'], check=True)
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
         notes = Path('docs/releases') / ('v' + name + '.md')
         if not notes.is_file():
             raise ValueError('Versioned release notes are missing')
-        validate_notes(os.environ['GITHUB_EVENT_NAME'], notes.read_text())
+        validate_notes(mode, notes.read_text())
+        if mode == 'publish':
+            from distribute import ensure_absent
+            ensure_absent('v' + name)
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'version={name}\ncode={code}\ncommit={commit}\n')
+        with open(os.environ.get('GITHUB_STEP_SUMMARY', os.devnull), 'a') as summary:
+            summary.write(f'## {mode}: {name} (code {code})\nCommit: `{commit}`\n\n'
+                          + ('正式公開を要求。検証・署名成功後に公開します。' if mode == 'publish' else 'テスト候補のみ。正式公開は行いません。') + '\n')
     else:
         if args.apk is None:
             raise ValueError('--apk is required')
@@ -86,7 +90,9 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError, KeyError, OSError, subprocess.CalledProcessError):
+    except (ValueError, RuntimeError, KeyError, OSError, subprocess.CalledProcessError) as error:
         # Never dump a child process stderr or environment containing signing inputs.
         print('Release validation failed; check the ref, version, certificate and SDK configuration.', file=sys.stderr)
+        if isinstance(error, (ValueError, RuntimeError)):
+            print(str(error), file=sys.stderr)
         sys.exit(1)

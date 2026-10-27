@@ -223,8 +223,8 @@ Android StudioではAPI 26以上の端末・エミュレーターを選んでRun
 
 2026-10-27のユーザー報告で、署名付きAPKの投稿・保存、位置・天気の連続付与、JSON保存・復元が成功しました。
 [公開前チェックリスト](docs/RELEASE_CHECKLIST.md) に、CIの証跡と未確認項目を分けて記録しています。
-鍵の別媒体保管、同一署名での更新とデータ保持、既存データの退避は確認が残るため、
-[リリースノート案](docs/releases/v0.1.0.md) はdraft状態です。正式公開はユーザーが判断・実施します。
+鍵の別媒体保管、同一署名での更新とデータ保持、既存データの退避は、チェックリストに確認状況を残してください。
+[リリースノート](docs/releases/v0.1.0.md) は現在readyですが、それだけでは公開しません。正式公開はユーザーがActionsで明示的に選択します。
 
 ### 鍵を一度だけ生成し、安全に保管する
 
@@ -249,7 +249,7 @@ keytool -list -v -keystore "$HOME/.memonow-signing/memonow-release.jks" -alias m
 
 リポジトリのSettings → Environmentsで **release-signing** を作成し、先に次の保護を設定します。
 
-- 必須レビュアーを設定し、可能なら自己承認を防ぎます。手動候補ビルドはレビュー済みmain、タグ公開時は実機チェック完了を確認して承認します。
+- 必須レビュアーを設定し、可能なら自己承認を防ぎます。手動候補ビルドはレビュー済みmain、publish時は実機チェック完了を確認して承認します。
 - Deployment branches/tagsをmainブランチと意図した`v*`タグに限定します。mainとタグの作成・更新・削除権限もRulesets等で保護し、未レビューの変更を通さない運用にしてください。
 - 以下の秘密情報は**Environment Secrets**へ入れます。PRや任意ブランチから利用可能なRepository/Organization Secretsとして保存しないでください。
 
@@ -289,32 +289,38 @@ python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-rele
 検証時に`--debug`・`--info`・`--scan`等で署名設定をログ/外部サービスへ出さないでください。作業後は秘密の環境変数を解除します。
 鍵を渡す設定は通常のdebug開発環境に保存しません。
 
-### 候補ビルド → 実機確認 → タグ公開
+### Actionsからテスト候補／正式公開を選ぶ
 
-1. 本PRをレビュー・マージし、上記Environment保護・Secrets・証明書変数を設定します。
-2. Actionsの **Signed release APK** を **main** 上で手動実行します。mainに含まれるコミットだけが対象で、PRでは動きません。
-   手動実行の成功時は、署名付きAPKとSHA-256を**未公開のDraft Release**にも添付します。Actionsの実行Summaryにリンクが表示されます。
-   スマートフォンのGitHubへ管理者アカウントでログインし、リンク先からAPKを取得してください。Draftは一般公開されず、リポジトリの参照権限が必要です。
-   テスト用タグ名は`test-v`始まりの実行別名称を使用し、正式版`v0.1.0`タグの公開フローとは分離します。短期保存のArtifactsも従来どおり作成します。
-3. 候補を取得し、チェックサムと署名を検証して、チェックリストの実機項目とデータ更新を確認します。
-   現在のDraft候補も正式予定版も `0.1.0` / code `1` です。同じcodeでの差し替えを更新検証とせず、
-   [候補からの移行と必須残確認](docs/RELEASE_CHECKLIST.md#公開前の必須残確認)を先に確認してください。
-4. 鍵保管・既存データの退避・更新時のデータ保持などの必須残確認を完了し、未確認項目の扱いを記録した後、リリースノートの先頭コメントを `release-status: draft` から `release-status: ready` へ変更します。
-   draftのままタグを作成しても検証ジョブが失敗し、公開しません。
-5. version値・ノートを確定したmainのコミットを指定して、**ユーザーが意図して**タグを作成・pushします。初回の例は以下です（今回のPRでは実行しません）。
+1. 実装担当がversion・リリースノート・確認記録を公開準備PRに揃えます。公開前確認を踏まえ、公開可能な版だけノート先頭を `release-status: ready` にします。ユーザーはPRを確認してマージします。
+2. GitHub **Actions → Signed release APK → Run workflow** でブランチ **main** とモードを選び、1回実行します。
+   - **preview**（初期値）：テスト用APKとSHA-256を未公開Draft Releaseへ置きます。正式タグ・公開Releaseは作りません。スマートフォンでは管理者アカウントでログインして取得してください。
+   - **publish**：正式公開への最終承認です。テスト・署名検証後、CIが検証済みコミットへ `v<versionName>` タグを作成し、同じ実行のAPKをDraftへ添付して再検証し、最後に公開します。ユーザーのタグ入力・CLI操作・Draft解除操作は不要です。
+3. Summaryでモード、version/code、commit、Release URL、公開／未公開状態、APK SHA-256を確認し、取得した成果物を照合してください。テスト候補と正式版が同一バイナリとは保証しません。
 
-```sh
-git tag -a v0.1.0 <確認済みmainコミットSHA> -m 'memonow v0.1.0'
-git push origin v0.1.0
-```
+旧[run 40448583861](https://github.com/YanTKYS/memonow/actions/runs/40448583861)は、従来の手動候補作成が成功し、タグpush専用のpublishがskippedになった実行です。successは正式公開を意味しませんでした。
+新方式ではタグpushを起動条件から外し、主経路をmainでの明示的手動実行に一本化します。GITHUB_TOKENによるタグ作成が別実行を起動しない性質にも依存せず、再公開の連鎖を防ぎます。
+readyだけ、mainへのpushだけ、タグpushだけでは公開しません。draft・別ブランチ・不正modeは署名前に拒否します。
 
-タグ名は`v` + versionNameと一致する必要があります。次回更新は例えばversionCode=2 / versionName=0.1.1にし、
-`docs/releases/v0.1.1.md`を用意して同じ手順を行います。単に再実行するために配布済みversionCodeを再利用しないでください。
+鍵とパスワードの別媒体保管・読み出し確認は初回と鍵変更時に行い、その記録を保ちます。
+版ごとには既存データのJSON退避、更新時のデータ保持、候補からの移行と確認記録を見直します。毎回鍵を作り直しません。
+現在のDraft候補と正式予定版はともに `0.1.0` / code `1` です。同じcodeの差し替えは通常の更新検証と区別します。
+詳細は[必須残確認](docs/RELEASE_CHECKLIST.md#公開前の必須残確認)を参照してください。
+次版は例えばcode 2 / name 0.1.1と対応するノートを準備し、公開済みcodeを再利用しません。
 
-タグ時は、秘密なしのテスト・ビルド・Lint成功後に保護環境で署名し、証明書等を検証してからAPKと`.apk.sha256`をGitHub Releasesへ添付します。
-アップロード中はdraftのままにし、全ファイルの添付が成功した後だけ公開します。GitHub ReleasesのファイルはActions Artifactsの短期失効には依存しません。
-途中失敗でdraftが残った場合は内容をレビューして手動整理してください。自動で既存リリースを上書き・削除しません。
-Draft作成のpreviewジョブと正式公開のpublishジョブがcontents:writeを持ち、署名ジョブはreadのみです。
+### 重複実行・途中失敗の回復
+
+全リリース実行は共通concurrencyで直列化します。publishは署名前と公開直前に正式タグ・Release（未公開Draftを含む）の存在を検査します。
+既存オブジェクトがあれば同じコミットでも停止し、自動上書き・削除・タグ付け替え・既存Draftの公開はしません。
+成功後の再実行も同じ版では停止します。previewの再実行はrun/attempt別の新しい未公開Draftを作ります。
+
+失敗時はSummaryと該当runを確認してください。
+- タグ／Draftがまだない場合：ネットワーク・権限・署名失敗を修復して再実行できます。
+- タグだけ、または未公開Draftと途中のassetsが残った場合：そのcommit・証明書・assets・失敗段階を管理者が確認します。本実装は自動再開しません。原則は修正と新しいバージョンのPRを準備します。同じ版で再試行が必要なら、未公開であることを確認した管理者が残存Draft／タグの整理を個別に判断し、整理後に改めてpublishを承認します。
+- 公開済み、または公開PATCHの結果が不明な場合：まずReleaseの公開状態を確認し、既に公開されていれば再配布・削除でやり直さず、修正は次版にします。
+
+署名ジョブはreadのみ、タグ／Releaseを扱うdistributeジョブだけがcontents:writeを持ちます。秘密鍵・署名パスワードはdistributeへ渡しません。
+添付後にダウンロードしたAPKのSHA-256・署名証明書の公開固定値・applicationId・version・非debuggableを再検査してから公開します。
+ReleasesのファイルはArtifactsの短期失効に依存しません。
 
 取得したファイルの確認例：
 
