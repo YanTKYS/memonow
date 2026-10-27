@@ -1,5 +1,6 @@
 package com.yantkys.memonow.metadata
 
+import android.os.Build
 import android.content.Context
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -13,10 +14,32 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 
 class AndroidPlaceSource(context: Context) : PlaceSource {
     private val geocoder = Geocoder(context, Locale.getDefault())
+    private val asyncSlots = java.util.concurrent.Semaphore(2)
 
     @Suppress("DEPRECATION")
     override suspend fun name(point: CoarsePoint): String? {
         if (!Geocoder.isPresent()) throw MetadataFailure(MetadataProblem.GEOCODER_UNSUPPORTED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            // No native cancellation API: keep capacity reserved until the real callback,
+            // even if our deadline fires. An unresponsive service cannot accumulate calls.
+            if (!asyncSlots.tryAcquire()) throw MetadataFailure(MetadataProblem.PLACE_FAILED)
+            return suspendCancellableCoroutine { continuation ->
+                val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+                fun finish() = completed.compareAndSet(false, true).also { if (it) asyncSlots.release() }
+                try {
+                    geocoder.getFromLocation(point.latitude, point.longitude, 1, object : Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: MutableList<Address>) {
+                            if (finish() && continuation.isActive) continuation.resume(municipality(addresses.firstOrNull()))
+                        }
+                        override fun onError(errorMessage: String?) {
+                            if (finish() && continuation.isActive) continuation.resumeWithException(MetadataFailure(MetadataProblem.PLACE_FAILED))
+                        }
+                    })
+                } catch (_: Exception) {
+                    if (finish() && continuation.isActive) continuation.resumeWithException(MetadataFailure(MetadataProblem.PLACE_FAILED))
+                }
+            }
+        }
         // Legacy Geocoder may block in a system service. Limit workers and queued work;
         // cancellation releases the coroutine even if an OEM's Binder call ignores interruption.
         return suspendCancellableCoroutine { continuation ->
