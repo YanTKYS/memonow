@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -18,7 +19,7 @@ class Distribution(unittest.TestCase):
         for mode in ('', 'release', 'PUBLISH'):
             with self.assertRaises(ValueError):
                 d.validate_ref('workflow_dispatch', 'refs/heads/main', '0.1.0', mode)
-        for event, ref in [('push', 'refs/tags/v0.1.0'), ('workflow_dispatch', 'refs/heads/feature')]:
+        for event, ref in [('push', 'refs/tags/v0.1.0'), ('workflow_dispatch', 'refs/heads/feature'), ('workflow_dispatch', 'refs/heads/main')]:
             with self.assertRaises(ValueError):
                 d.validate_ref(event, ref, '0.1.0', 'publish')
 
@@ -44,7 +45,7 @@ class Distribution(unittest.TestCase):
             os.chdir(temp)
             try:
                 Path('docs/releases').mkdir(parents=True)
-                Path('docs/releases/v0.1.0.md').write_text('<!-- release-status: ready -->\nnotes')
+                Path('docs/releases/v0.1.0.md').write_text('# v0.1.0\nnotes')
                 Path('version.properties').write_text('versionName=0.1.0\nversionCode=1\n')
                 Path('dist').mkdir()
                 apk=Path('dist/memonow-v0.1.0.apk'); apk.write_bytes(b'fixture apk, not signed')
@@ -71,11 +72,12 @@ class Distribution(unittest.TestCase):
                                  b'tampered' if fail == 'download' else apk.read_bytes())
                 def verify(*args):
                     if fail == 'signature': raise ValueError('signature mismatch')
-                env={'GH_REPO':'YanTKYS/memonow','GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REF':'refs/heads/main',
+                env={'GH_REPO':'YanTKYS/memonow','GITHUB_EVENT_NAME':'push' if mode == 'publish' else 'workflow_dispatch','GITHUB_REF':'refs/heads/main',
                      'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1','ANDROID_HOME':'/sdk','GITHUB_STEP_SUMMARY':'summary'}
                 with patch.dict(os.environ,env), patch.object(d,'api',side_effect=api), patch.object(d,'gh',side_effect=gh), \
                      patch.object(d,'verify_apk',side_effect=verify), patch.object(d.subprocess,'check_output',return_value=commit), \
-                     patch.object(d.subprocess,'run',side_effect=download):
+                     patch.object(d.subprocess,'run',side_effect=download), \
+                     patch('release_plan.require_merge'), patch('release_plan.decide',return_value=('release','')):
                     try: d.distribute(mode,commit,'aa'*32)
                     except (ValueError,subprocess.CalledProcessError):
                         if fail is None: raise
@@ -107,14 +109,29 @@ class Distribution(unittest.TestCase):
 
     def test_workflow_permissions_dependencies_and_single_manual_path(self):
         content=(ROOT/'.github/workflows/release.yml').read_text()
-        self.assertNotIn('  push:',content)
-        self.assertIn('default: preview',content)
-        self.assertIn('options: [preview, publish]',content)
+        self.assertIn('branches: [main]',content)
+        self.assertNotIn('tags:',content)
+        self.assertNotIn('inputs.mode',content)
+        self.assertIn("if: needs.plan.outputs.action != 'skip'", content)
         self.assertIn('group: release-memonow',content)
         sign=content.split('  sign:\n')[1].split('  distribute:\n')[0]
         self.assertIn('environment: release-signing',sign)
         self.assertNotIn('contents: write',sign)
         distribution=content.split('  distribute:\n')[1]
-        self.assertIn('needs: [validate, sign]',distribution)
+        self.assertIn('needs: [plan, validate, sign]',distribution)
         self.assertIn('contents: write',distribution)
         self.assertNotIn('secrets.',distribution)
+
+    def test_distribute_can_read_merge_approval_without_granting_sign_write(self):
+        content=(ROOT/'.github/workflows/release.yml').read_text()
+        def parse_permissions(block, indent):
+            match=re.search(r'^' + ' '*indent + r'permissions:\n((?:' + ' '*(indent+2) + r'[^\n]+\n)+)',block,re.M)
+            return None if match is None else dict(line.strip().split(': ',1) for line in match[1].splitlines())
+        inherited=parse_permissions(content.split('jobs:\n')[0],0)
+        jobs=dict(re.findall(r'^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)',content.split('jobs:\n')[1],re.M|re.S))
+        effective={name: parse_permissions(block,4) if parse_permissions(block,4) is not None else inherited
+                   for name,block in jobs.items()}
+        # An explicit job map replaces the root map; missing scopes are not inherited.
+        self.assertEqual({'contents':'write','pull-requests':'read'},effective['distribute'])
+        self.assertEqual('read',effective['sign']['contents'])
+        self.assertEqual(['distribute'],[name for name,permissions in effective.items() if permissions.get('contents')=='write'])
