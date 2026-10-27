@@ -77,7 +77,7 @@ class UpdateViewModel @JvmOverloads constructor(app: Application,
     fun cancel() { job?.cancel() }
     fun close() { cancel(); if (!handedOff) { ready.delete(); _state.value = state.value.copy(ready = false) } }
     private fun operate(block: suspend () -> Unit) {
-        if (job?.isActive == true) return
+        if (job?.isCompleted == false) return // Includes a cancelled job still finishing socket/file cleanup.
         job = viewModelScope.launch {
             try { block() }
             catch (cancelled: CancellationException) {

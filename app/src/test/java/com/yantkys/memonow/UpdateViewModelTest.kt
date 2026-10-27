@@ -139,6 +139,25 @@ class UpdateViewModelTest {
         assertEquals(1,File(context.cacheDir,"updates/ready").walkTopDown().count { it.isFile })
         first.close()
     }
+    @Test fun cancellingOperationMustFinishCleanupBeforeAnotherStarts() = runTest {
+        var checks=0
+        val entered=CompletableDeferred<Unit>()
+        val finish=CompletableDeferred<Unit>()
+        val model=model(object:UpdateSource {
+            override suspend fun latest():ReleaseUpdate { checks++; return release }
+            override suspend fun download(release:ReleaseUpdate,file:File,progress:(Long)->Unit) {
+                file.writeBytes(ByteArray(4))
+                withContext(NonCancellable) { entered.complete(Unit);finish.await() }
+            }
+        })
+        model.check();idle(model);model.download();entered.await()
+        model.cancel();model.check()
+        assertEquals(1,checks)
+        finish.complete(Unit);idle(model)
+        assertFalse(model.state.value.ready)
+        assertFalse(File(context.cacheDir,"updates").walkTopDown().any { it.isFile && it.extension=="part" })
+        model.check();idle(model);assertEquals(2,checks)
+    }
     @Test fun failedCheckAndClosingBeforeHandoffClearReadyState() = runTest {
         val model=model(source())
         model.check();idle(model);model.download();idle(model)
