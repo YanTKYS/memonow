@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -120,3 +121,17 @@ class Distribution(unittest.TestCase):
         self.assertIn('needs: [plan, validate, sign]',distribution)
         self.assertIn('contents: write',distribution)
         self.assertNotIn('secrets.',distribution)
+
+    def test_distribute_can_read_merge_approval_without_granting_sign_write(self):
+        content=(ROOT/'.github/workflows/release.yml').read_text()
+        def parse_permissions(block, indent):
+            match=re.search(r'^' + ' '*indent + r'permissions:\n((?:' + ' '*(indent+2) + r'[^\n]+\n)+)',block,re.M)
+            return None if match is None else dict(line.strip().split(': ',1) for line in match[1].splitlines())
+        inherited=parse_permissions(content.split('jobs:\n')[0],0)
+        jobs=dict(re.findall(r'^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)',content.split('jobs:\n')[1],re.M|re.S))
+        effective={name: parse_permissions(block,4) if parse_permissions(block,4) is not None else inherited
+                   for name,block in jobs.items()}
+        # An explicit job map replaces the root map; missing scopes are not inherited.
+        self.assertEqual({'contents':'write','pull-requests':'read'},effective['distribute'])
+        self.assertEqual('read',effective['sign']['contents'])
+        self.assertEqual(['distribute'],[name for name,permissions in effective.items() if permissions.get('contents')=='write'])

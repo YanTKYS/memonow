@@ -310,8 +310,8 @@ python3 tools/release.py verify-apk --apk app/build/outputs/apk/release/app-rele
 ### 初回のGitHub保護設定
 
 release-signing Environmentと署名Secretsは維持します。確認時点のEnvironmentはbranch policyだけで追加レビュアー待ちはありません。
-Rulesets一覧は空、従来のmainブランチ保護APIは403で詳細を確認できませんでした。設定は変更していません。
-オーナーはGitHub Settings → Rules → RulesetsでmainにPR必須、必要なレビューとAndroid CI、強制push・削除の禁止、管理者を含む迂回制限を設定してください。
+2026-10-27の確認で `GET /branches/main` は **protected: false**、Rulesets一覧も空でした。現時点でmainへの有効なブランチ保護が確認できない状態です（従来の `/protection` APIは403）。設定は変更していません。
+**自動公開の導入前にオーナーが一度だけ**、GitHub Settings → Rules → RulesetsでmainにPR必須、必要なレビューとAndroid CI、強制push・削除の禁止、管理者を含む迂回制限を有効化してください。毎リリースの追加操作ではなく、初回の安全設定です。
 自動公開側でも「オーナーがmainへマージしたPRのmerge commit」をAPIで照合し、通常の直接pushを拒否します。保護設定はこの検査の代わりではなく、Workflow自体の未レビュー変更を防ぐためにも必要です。
 
 ### 重複実行・途中失敗の回復
