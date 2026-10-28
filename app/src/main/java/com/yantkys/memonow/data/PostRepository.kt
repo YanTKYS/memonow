@@ -13,9 +13,10 @@ class PostRepository(private val dao: PostDao, private val clock: Clock = Clock.
     private var revision = 0L
     private var metadataGeneration = 0L
 
-    suspend fun create(body: String): String = writes.withLock {
+    suspend fun create(body: String, moodId: String? = null): String = writes.withLock {
+        require(Mood.isKnownOrNull(moodId)) { "未対応の気分です。" }
         val id = UUID.randomUUID().toString()
-        dao.insert(Post(id = id, body = validBody(body), createdAt = clock.millis()))
+        dao.insert(Post(id = id, body = validBody(body), createdAt = clock.millis(), moodId = moodId))
         revision++
         id
     }
@@ -31,6 +32,17 @@ class PostRepository(private val dao: PostDao, private val clock: Clock = Clock.
     }
     suspend fun edit(id: String, body: String) = writes.withLock {
         check(dao.updateBody(id, validBody(body)) == 1) { "Post no longer exists" }
+        revision++
+    }
+    suspend fun edit(id: String, body: String, moodId: String?) = writes.withLock {
+        val existing = checkNotNull(dao.find(id)) { "Post no longer exists" }
+        // Preserve an already stored unknown ID on body-only edits; never reinterpret it.
+        require(Mood.isKnownOrNull(moodId) || existing.moodId == moodId) { "未対応の気分です。" }
+        val validated = validBody(body)
+        // Imported text may intentionally contain surrounding whitespace. A mood-only
+        // edit must not normalize that unchanged body.
+        val savedBody = if (body == existing.body) body else validated
+        check(dao.updateContent(id, savedBody, moodId) == 1) { "Post no longer exists" }
         revision++
     }
     suspend fun delete(id: String) = writes.withLock {

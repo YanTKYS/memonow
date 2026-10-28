@@ -30,7 +30,7 @@ fun BackupDialog(model: PostViewModel, state: BackupState, onClose: () -> Unit) 
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 when (state) {
                     BackupState.Idle -> {
-                        Text("JSONは暗号化されない平文です。本文・地名・天気が含まれるため、保存先と共有先を慎重に選んでください。")
+                        Text("JSONは暗号化されない平文です。本文・日時・気分・地名・天気が含まれるため、保存先と共有先を慎重に選んでください。")
                         Text("保存先にクラウドを選ぶ場合は、そのサービスへ手動で保存されます。アプリの自動同期ではありません。設定・位置権限は含みません。")
                         Text("上限：10MiB・1万件・本文各10万文字。復元は全件置換のみです。先に現在の記録を保存しておくことをおすすめします。")
                         Button(onClick = {

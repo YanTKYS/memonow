@@ -50,6 +50,54 @@ class PostRepositoryTest {
         assertTrue(repository.posts.first().isEmpty())
     }
 
+    @Test fun moodEditsAndConcurrentMetadataPreserveEachOthersFieldsAndDeletedRowsStayDeleted() = runTest {
+        val id = repository.create("本文", "happy")
+        val original = repository.find(id)!!
+        val token = repository.metadataToken()
+        kotlinx.coroutines.coroutineScope {
+            launch { repository.edit(id, "編集後", "sad") }
+            launch { repository.attachPlace(id, "沖縄県 糸満市", token) }
+            launch { repository.attachWeather(id, 3, 25.5, original.createdAt, token) }
+        }
+        val expected = original.copy(body = "編集後", moodId = "sad", placeName = "沖縄県 糸満市", weatherCode = 3, temperatureC = 25.5, weatherAt = original.createdAt)
+        assertEquals(expected, repository.find(id))
+        repository.edit(id, "本文のみ")
+        assertEquals(expected.copy(body = "本文のみ"), repository.find(id))
+        repository.edit(id, "本文のみ", null)
+        assertEquals(expected.copy(body = "本文のみ", moodId = null), repository.find(id))
+        repository.delete(id)
+        assertEquals(0, repository.attachPlace(id, "遅延応答", token))
+        assertEquals(0, repository.attachWeather(id, 0, 20.0, original.createdAt, token))
+        try { repository.edit(id, "復活させない", "fun"); fail("deleted post edited") } catch (_: IllegalStateException) { }
+        assertNull(repository.find(id))
+    }
+
+    @Test fun unknownMoodIsNotInventedOrReinterpreted() = runTest {
+        assertNull(com.yantkys.memonow.data.Mood.find("HAPPY"))
+        assertNull(com.yantkys.memonow.data.Mood.find("unknown"))
+        try { repository.create("本文", "unknown"); fail("unknown create") } catch (_: IllegalArgumentException) { }
+        val id = repository.create("本文", "normal")
+        try { repository.edit(id, "変更", "unknown"); fail("unknown edit") } catch (_: IllegalArgumentException) { }
+        assertEquals("normal", repository.find(id)!!.moodId)
+        // An already stored unknown value stays distinct until explicitly replaced/cleared.
+        database.posts().updateContent(id, "未知の既存記録", "future-id")
+        repository.edit(id, "本文だけ編集", "future-id")
+        assertEquals("future-id", repository.find(id)!!.moodId)
+        repository.edit(id, "本文だけ編集", null)
+        assertNull(repository.find(id)!!.moodId)
+    }
+
+    @Test fun moodOnlyEditAndRemovalKeepImportedBodyByteForByte() = runTest {
+        val post = Post(id = java.util.UUID.randomUUID().toString(), body = "  JSONの原文\n末尾も保持　", createdAt = 1000,
+            placeName = "沖縄県 糸満市", weatherCode = 0, temperatureC = 0.0, weatherAt = 1000)
+        database.posts().insert(post)
+        val original = repository.find(post.id)!!
+        repository.edit(post.id, post.body, "tired")
+        assertEquals(original.copy(moodId = "tired"), repository.find(post.id))
+        repository.edit(post.id, post.body, null)
+        assertEquals(original, repository.find(post.id))
+    }
+
     @Test fun hundredsOfSameTimestampPostsKeepInsertionOrderAndUniqueIds() = runTest {
         val ids = (1..400).map { repository.create("記録 $it") }
         assertEquals(400, ids.toSet().size)

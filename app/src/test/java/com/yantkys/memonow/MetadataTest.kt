@@ -550,7 +550,7 @@ class MetadataTest {
             old.version = 1
         }
         val migrated = Room.databaseBuilder(context, MemonowDatabase::class.java, filename)
-            .addMigrations(MemonowDatabase.MIGRATION_1_2).build()
+            .addMigrations(MemonowDatabase.MIGRATION_1_2, MemonowDatabase.MIGRATION_2_3).build()
         try {
             val posts = migrated.posts().observeAll().first()
             assertEquals(listOf("a", "b"), posts.map { it.id })

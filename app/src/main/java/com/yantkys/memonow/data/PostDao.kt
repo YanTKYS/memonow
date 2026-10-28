@@ -40,6 +40,9 @@ interface PostDao {
     @Query("UPDATE posts SET body = :body WHERE id = :id")
     suspend fun updateBody(id: String, body: String): Int
 
+    @Query("UPDATE posts SET body = :body, moodId = :moodId WHERE id = :id")
+    suspend fun updateContent(id: String, body: String, moodId: String?): Int
+
     @Query("DELETE FROM posts WHERE id = :id")
     suspend fun delete(id: String): Int
 }

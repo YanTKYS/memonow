@@ -36,7 +36,7 @@ class MemonowApplication : Application() {
 
     private val database by lazy {
         Room.databaseBuilder(this, MemonowDatabase::class.java, "memonow.db")
-            .addMigrations(MemonowDatabase.MIGRATION_1_2).build()
+            .addMigrations(MemonowDatabase.MIGRATION_1_2, MemonowDatabase.MIGRATION_2_3).build()
     }
     val repository by lazy { PostRepository(database.posts()) }
     val backupStore by lazy { BackupStore(database, repository) }

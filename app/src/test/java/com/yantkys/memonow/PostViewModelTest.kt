@@ -77,6 +77,89 @@ class PostViewModelTest {
         assertEquals(1, dao.rows.value.size)
     }
 
+    @Test fun allSixMoodsAreOptionalToggleableAndClearedOnlyAfterSuccess() = runTest {
+        assertNull(model.moodId.value)
+        for (mood in com.yantkys.memonow.data.Mood.entries) {
+            model.toggleMood(mood.id)
+            assertEquals(mood.id, model.moodId.value)
+            model.toggleMood(mood.id)
+            assertNull(model.moodId.value)
+        }
+        model.toggleMood("unknown")
+        assertNull(model.moodId.value)
+        model.toggleMood("happy")
+        model.toggleMood("tired")
+        model.updateDraft("本文と気分")
+        dao.failWrites = true
+        model.send()
+        runCurrent()
+        assertEquals("本文と気分", model.draft.value)
+        assertEquals("tired", model.moodId.value)
+        assertEquals("tired", handle.get<String>("moodId"))
+        assertTrue(dao.rows.value.isEmpty())
+        dao.failWrites = false
+        model.send()
+        // A busy write cannot change the selection used for this post.
+        model.toggleMood("sad")
+        runCurrent()
+        assertEquals("tired", dao.rows.value.single().moodId)
+        assertEquals("", model.draft.value)
+        assertNull(model.moodId.value)
+        model.updateDraft("気分なしでも送信")
+        model.send()
+        runCurrent()
+        assertNull(dao.rows.value.last().moodId)
+    }
+
+    @Test fun composeAndEditMoodSurviveSavedStateRecreation() = runTest {
+        model.updateDraft("未送信")
+        model.toggleMood("fun")
+        val post = Post(id = "id", body = "過去の投稿", createdAt = 10, moodId = "sad")
+        model.startEditing(post)
+        model.updateEditDraft("編集途中")
+        model.toggleEditMood("normal")
+        val recreated = PostViewModel(PostRepository(dao), SavedStateHandle(handle.keys().associateWith { handle.get<Any?>(it) }))
+        store.put("recreated", recreated)
+        assertEquals("未送信", recreated.draft.value)
+        assertEquals("fun", recreated.moodId.value)
+        assertEquals("id", recreated.editingId.value)
+        assertEquals("編集途中", recreated.editDraft.value)
+        assertEquals("normal", recreated.editMoodId.value)
+    }
+
+    @Test fun moodOnlyEditingFailureRetryAndRemovalKeepIdentityAndDoNotEnrich() = runTest {
+        var enrichCalls = 0
+        val editor = PostViewModel(PostRepository(dao), SavedStateHandle(), enrich = { enrichCalls++ })
+        store.put("editor", editor)
+        editor.updateDraft("元の本文")
+        editor.toggleMood("angry")
+        editor.send()
+        runCurrent()
+        val original = dao.rows.value.single()
+        assertEquals(1, enrichCalls)
+        editor.startEditing(original)
+        assertEquals("angry", editor.editMoodId.value)
+        editor.toggleEditMood("happy")
+        dao.failWrites = true
+        editor.edit()
+        runCurrent()
+        assertEquals(original, dao.rows.value.single())
+        assertEquals("happy", editor.editMoodId.value)
+        assertEquals(original.id, editor.editingId.value)
+        dao.failWrites = false
+        editor.edit()
+        runCurrent()
+        assertEquals(original.copy(moodId = "happy"), dao.rows.value.single())
+        editor.startEditing(dao.rows.value.single())
+        editor.toggleEditMood("happy")
+        editor.edit()
+        runCurrent()
+        assertEquals(original.copy(moodId = null), dao.rows.value.single())
+        assertEquals(1, enrichCalls)
+        assertEquals("", editor.draft.value)
+        assertNull(editor.moodId.value)
+    }
+
     @Test fun whitespaceOnlyCannotBeSent() = runTest {
         model.updateDraft("　 \n\t")
         model.send()
@@ -232,6 +315,12 @@ class PostViewModelTest {
             if (failWrites) throw IOException("disk full")
             val count = rows.value.count { it.id == id }
             rows.value = rows.value.map { if (it.id == id) it.copy(body = body) else it }
+            return count
+        }
+        override suspend fun updateContent(id: String, body: String, moodId: String?): Int {
+            if (failWrites) throw IOException("disk full")
+            val count = rows.value.count { it.id == id }
+            rows.value = rows.value.map { if (it.id == id) it.copy(body = body, moodId = moodId) else it }
             return count
         }
         override suspend fun delete(id: String): Int {

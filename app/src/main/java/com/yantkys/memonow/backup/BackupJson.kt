@@ -4,6 +4,7 @@ import android.util.JsonReader
 import android.util.JsonToken
 import android.util.JsonWriter
 import com.yantkys.memonow.data.Post
+import com.yantkys.memonow.data.Mood
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStreamWriter
@@ -26,7 +27,8 @@ object BackupJson {
     const val MAX_BODY = 100_000
     const val MAX_SEQUENCE = Long.MAX_VALUE / 2 // Leave ample AUTOINCREMENT headroom.
     private const val MAX_DATE = 253402300799999L // 9999-12-31T23:59:59.999Z
-    private val fields = setOf("id", "sequence", "body", "createdAt", "placeName", "weatherCode", "temperatureC", "weatherAt")
+    private val v1Fields = setOf("id", "sequence", "body", "createdAt", "placeName", "weatherCode", "temperatureC", "weatherAt")
+    private val v2Fields = v1Fields + "moodId"
     private data class NumberText(val text: String)
     private fun verify(ok: Boolean, message: String = "バックアップの形式・値が正しくありません。") {
         if (!ok) throw InvalidBackup(message)
@@ -40,40 +42,33 @@ object BackupJson {
             reader.beginObject()
             val seen = mutableSetOf<String>()
             var exportedAt: Long? = null
-            var posts: List<Post>? = null
+            var schemaVersion: Int? = null
+            var posts: List<Map<String, Any?>>? = null
             while (reader.hasNext()) {
                 val name = reader.nextName()
                 verify(seen.add(name))
                 when (name) {
                     "app" -> verify(scalar(reader) == "memonow", "memonowのバックアップではありません。")
-                    "schemaVersion" -> verify(integer(scalar(reader)) == 1L, "未対応のバックアップ形式です。")
+                    "schemaVersion" -> {
+                        val version = integer(scalar(reader))
+                        verify(version == 1L || version == 2L, "未対応のバックアップ形式です。")
+                        schemaVersion = version.toInt()
+                    }
                     "exportedAt" -> exportedAt = date(scalar(reader))
                     "posts" -> {
                         reader.beginArray()
-                        val list = mutableListOf<Post>()
+                        val list = mutableListOf<Map<String, Any?>>()
                         while (reader.hasNext()) {
                             verify(list.size < MAX_POSTS, "投稿は1万件までです。")
                             val values = mutableMapOf<String, Any?>()
                             reader.beginObject()
                             while (reader.hasNext()) {
                                 val key = reader.nextName()
-                                verify(key in fields && !values.containsKey(key))
+                                verify(key in v2Fields && !values.containsKey(key))
                                 values[key] = scalar(reader)
                             }
                             reader.endObject()
-                            verify(values.keys == fields)
-                            list += Post(
-                                sequence = integer(values["sequence"]), id = string(values["id"]),
-                                body = string(values["body"]), createdAt = date(values["createdAt"]),
-                                placeName = values["placeName"]?.let(::string),
-                                weatherCode = values["weatherCode"]?.let { integer(it).also { code -> verify(code in 0..999) }.toInt() },
-                                temperatureC = values["temperatureC"]?.let { value ->
-                                    verify(value is NumberText)
-                                    (value as NumberText).text.toDoubleOrNull()?.also { verify(it.isFinite()) }
-                                        ?: throw InvalidBackup("気温が正しくありません。")
-                                },
-                                weatherAt = values["weatherAt"]?.let(::date),
-                            )
+                            list += values
                         }
                         reader.endArray()
                         posts = list
@@ -84,24 +79,44 @@ object BackupJson {
             reader.endObject()
             verify(reader.peek() == JsonToken.END_DOCUMENT)
             verify(seen == setOf("app", "schemaVersion", "exportedAt", "posts"))
-            val result = BackupDocument(exportedAt!!, posts!!.toList())
+            val result = BackupDocument(exportedAt!!, posts!!.map { parsePost(it, schemaVersion!!) })
             validate(result)
             return result
         }
     }
+
+    private fun parsePost(values: Map<String, Any?>, schemaVersion: Int): Post {
+        val expected = when (schemaVersion) { 1 -> v1Fields; 2 -> v2Fields; else -> throw InvalidBackup("未対応のバックアップ形式です。") }
+        verify(values.keys == expected, "バックアップの投稿項目がスキーマと一致しません。")
+        return Post(
+            sequence = integer(values["sequence"]), id = string(values["id"]),
+            body = string(values["body"]), createdAt = date(values["createdAt"]),
+            placeName = values["placeName"]?.let(::string),
+            weatherCode = values["weatherCode"]?.let { integer(it).also { code -> verify(code in 0..999) }.toInt() },
+            temperatureC = values["temperatureC"]?.let { value ->
+                verify(value is NumberText)
+                (value as NumberText).text.toDoubleOrNull()?.also { verify(it.isFinite()) }
+                    ?: throw InvalidBackup("気温が正しくありません。")
+            },
+            weatherAt = values["weatherAt"]?.let(::date),
+            moodId = if (schemaVersion == 2) values["moodId"]?.let(::string) else null,
+        )
+    }
+
 
     fun encode(document: BackupDocument): ByteArray {
         validate(document)
         val output = LimitedBytes()
         JsonWriter(OutputStreamWriter(output, Charsets.UTF_8)).use { writer ->
             writer.setIndent("  ")
-            writer.beginObject().name("app").value("memonow").name("schemaVersion").value(1)
+            writer.beginObject().name("app").value("memonow").name("schemaVersion").value(2)
                 .name("exportedAt").value(document.exportedAt).name("posts").beginArray()
             for (post in document.posts) {
                 writer.beginObject().name("id").value(post.id).name("sequence").value(post.sequence)
                     .name("body").value(post.body).name("createdAt").value(post.createdAt)
                     .name("placeName").value(post.placeName).name("weatherCode").value(post.weatherCode)
-                    .name("temperatureC").value(post.temperatureC).name("weatherAt").value(post.weatherAt).endObject()
+                    .name("temperatureC").value(post.temperatureC).name("weatherAt").value(post.weatherAt)
+                    .name("moodId").value(post.moodId).endObject()
             }
             writer.endArray().endObject()
         }
@@ -121,6 +136,7 @@ object BackupJson {
             verify(post.createdAt in 0..MAX_DATE)
             verify(post.body.isNotBlank() && post.body.length <= MAX_BODY, "本文は空白以外で10万文字までです。")
             verify(Charsets.UTF_8.newEncoder().canEncode(post.body))
+            verify(Mood.isKnownOrNull(post.moodId), "未対応または不正な気分IDです。")
             post.placeName?.let { verify(it.isNotBlank() && it.length <= 1000 && Charsets.UTF_8.newEncoder().canEncode(it)) }
             post.weatherCode?.let { verify(it in 0..999) }
             post.temperatureC?.let { verify(it.isFinite() && it in -100.0..70.0) }
