@@ -15,7 +15,7 @@ python3 -m unittest discover -s tools/tests -v
 bash tools/check-workflows.sh
 ```
 
-AndroidテストはRobolectric・Fakeを使い、実GPS・外部天気APIへ接続しません。
+JVMテストはRobolectric・Fakeを使い、実GPS・外部天気APIへ接続しません。
 API 28/31/36の位置取得、API 33のGeocoder、Room移行・投稿・ViewModel・JSON往復と失敗/キャンセルを検証します。
 Pythonは公開判定・版・署名/配布のガード、actionlintはWorkflowのYAML・式・Action参照を検証します。
 UIの表示・OSサービスの実際の取得成功率・端末上の更新互換性は別途実機またはエミュレーターで確認します。
@@ -62,7 +62,22 @@ UIの表示・OSサービスの実際の取得成功率・端末上の更新互�
 - [v0.1.0の確認記録](RELEASE_CHECKLIST.md)：初版のユーザー報告・CI証跡・当時の未確認事項（旧URLを維持）
 - [v0.1.1の確認記録](RELEASE_CHECKLIST_v0.1.1.md)：有限再試行・部分成功保持の検証
 - [v0.1.2の確認記録](RELEASE_CHECKLIST_v0.1.2.md)：競争的取得の検証と限定した実機フィードバック
+- [v0.1.3の確認記録](RELEASE_CHECKLIST_v0.1.3.md)：アプリ内更新・OS許可と初回導入の未確認事項
 - [版ごとのリリースノート](releases/)
 
 結果には端末/Android版・確認日・commit・APK SHA-256・署名証明書・成功/失敗/未確認/対象外の理由を、裏付けられる範囲で記録します。
 ビルドやCIの成功だけで、実機表示・データ保持・継続成功率まで確認済みとはしません。
+
+## アプリの更新
+
+API 26/36のJVMテストで版/資産/URLの検査、上限・中断・HTTP失敗、実署名APKと改ざん/別署名の拒否、FileProviderの限定公開、許可と再検証を確認します。
+加えてCIの`APK signature on Android API 26/36`は実際のAndroidエミュレーター上で署名検証のinstrumented smoke testを実行します。署名付きdebug APKのコピーに対して`ApkVerifier`と製品の`UpdateVerifier`を呼び、成功・実PackageManagerの証明書との一致・ハッシュを再計算した改ざんAPKの拒否を検証します。投稿DB・UI・実機の正式版は操作しません。結果は`signature-runtime-api-*` artifactへ保存します。
+
+ローカルで再実行する場合はAPI 26または36のテスト用エミュレーターだけを接続し、次を実行します（debugアプリとテストAPKをそのエミュレーターへインストールします）。
+
+```sh
+./gradlew connectedDebugAndroidTest
+```
+
+実機ではv0.1.3を手動導入後、次の正式版に対して確認・取得・許可画面・OS承認/取消・上書きと記録保持を確認します。初回のv0.1.3リリースでは完全な自己更新成功を確認済みとしません。
+[更新ガイド](updating.md)を参照し、署名不一致をアンインストールで解決しないでください。

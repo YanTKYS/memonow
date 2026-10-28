@@ -37,6 +37,7 @@ android {
         targetSdk = 36
         versionCode = publishedVersionCode
         versionName = publishedVersionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -70,6 +71,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(libs.android.apksig)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.room.runtime)
     kapt(libs.androidx.room.compiler)
@@ -79,6 +81,8 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.junit)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
@@ -95,5 +99,7 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 
 // Android 16 / API 36 Robolectric requires Java 21; app bytecode stays Java 17.
 tasks.withType<Test>().configureEach {
+    dependsOn("assembleDebug")
+    systemProperty("memonow.fixture.apk", layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile.absolutePath)
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
 }

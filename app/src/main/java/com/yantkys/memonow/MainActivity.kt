@@ -177,7 +177,7 @@ private fun MemonowScreen(model: PostViewModel) {
         BackupDialog(model, backup) { showBackup = false }
     }
     if (showSettings) {
-        MetadataSettingsDialog(app, onDisable = model::cancelMetadata, onDismiss = { showSettings = false })
+        SettingsDialog(app, onDisable = model::cancelMetadata, onDismiss = { showSettings = false })
     }
     if (editingId != null) {
         AlertDialog(

@@ -56,3 +56,67 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
           retention-days: 1
+
+  signature-runtime:
+    name: APK signature on Android API ${{ matrix.api }}
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [26, 36]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK 21 for SDK tools and Gradle
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Gradle and validate Wrapper
+        uses: gradle/actions/setup-gradle@v4
+      - name: Install pinned SDK packages
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"'
+      - name: Enable KVM for the isolated emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify APK signatures inside Android
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          disable-linux-hw-accel: false
+          script: ./gradlew --no-daemon --max-workers=2 connectedDebugAndroidTest
+      - name: Confirm both Android signature tests actually ran
+        env:
+          TEST_API: ${{ matrix.api }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          expected = {
+              "signedApkVerifiesAndItsCertificatesMatchAndroidPackageManager",
+              "modifiedApkIsRejectedEvenWithMatchingDownloadHash",
+          }
+          cases = [case for path in Path("app/build/outputs/androidTest-results/connected").rglob("TEST-*.xml")
+                   for case in ET.parse(path).getroot().iter("testcase")]
+          actual = {case.attrib["name"] for case in cases}
+          assert actual == expected and len(cases) == 2, f"Missing/duplicate runtime tests: {actual}"
+          assert all(not list(case) for case in cases), "Failed or skipped runtime test"
+          print(f"::notice title=Android signature runtime::API {os.environ['TEST_API']}: 2 tests passed, 0 failures/skips; signed APK + signer match + tampered APK rejection")
+          PY
+      - name: Upload Android runtime test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signature-runtime-api-${{ matrix.api }}-${{ github.run_number }}
+          path: |
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/
+          if-no-files-found: warn
+          retention-days: 1
