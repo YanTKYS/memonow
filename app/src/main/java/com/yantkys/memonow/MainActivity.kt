@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -85,12 +87,14 @@ private fun MemonowScreen(model: PostViewModel) {
     val backup by model.backupState.collectAsStateWithLifecycle()
     val feed by model.feed.collectAsStateWithLifecycle()
     val draft by model.draft.collectAsStateWithLifecycle()
+    val moodId by model.moodId.collectAsStateWithLifecycle()
     val writing by model.busy.collectAsStateWithLifecycle()
     val busy = writing || backup != BackupState.Idle
     val error by model.error.collectAsStateWithLifecycle()
     val sentId by model.sentId.collectAsStateWithLifecycle()
     val editingId by model.editingId.collectAsStateWithLifecycle()
     val editDraft by model.editDraft.collectAsStateWithLifecycle()
+    val editMoodId by model.editMoodId.collectAsStateWithLifecycle()
     val deletingId by model.deletingId.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     var initiallyPositioned by rememberSaveable { mutableStateOf(false) }
@@ -124,27 +128,28 @@ private fun MemonowScreen(model: PostViewModel) {
             Surface(tonalElevation = 3.dp) {
                 Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding().padding(12.dp)) {
                     capacityWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.Bottom,
-                ) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = model::updateDraft,
-                        modifier = Modifier.weight(1f),
-                        label = { Text("いまの一文") },
-                        placeholder = { Text("その瞬間のことを残す") },
-                        minLines = 1,
-                        maxLines = 5,
-                        enabled = !busy,
-                        isError = draft.length > BackupJson.MAX_BODY,
-                        supportingText = { if (draft.length > BackupJson.MAX_BODY) Text("本文は10万文字までです（絵文字などは2文字）。") },
-                    )
-                    Button(onClick = model::send, enabled = !busy && draft.isNotBlank() && draft.length <= BackupJson.MAX_BODY) {
-                        Text(if (busy) "保存中" else "送信")
+                    MoodPicker(moodId, !busy, model::toggleMood, model::clearMood)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        OutlinedTextField(
+                            value = draft,
+                            onValueChange = model::updateDraft,
+                            modifier = Modifier.weight(1f),
+                            label = { Text("いまの一文") },
+                            placeholder = { Text("その瞬間のことを残す") },
+                            minLines = 1,
+                            maxLines = 5,
+                            enabled = !busy,
+                            isError = draft.length > BackupJson.MAX_BODY,
+                            supportingText = { if (draft.length > BackupJson.MAX_BODY) Text("本文は10万文字までです（絵文字などは2文字）。") },
+                        )
+                        Button(onClick = model::send, enabled = !busy && draft.isNotBlank() && draft.length <= BackupJson.MAX_BODY) {
+                            Text(if (busy) "保存中" else "送信")
+                        }
                     }
-                }
                 }
             }
         },
@@ -184,17 +189,20 @@ private fun MemonowScreen(model: PostViewModel) {
             onDismissRequest = model::cancelEditing,
             title = { Text("投稿を編集") },
             text = {
-                OutlinedTextField(
-                    value = editDraft,
-                    onValueChange = model::updateEditDraft,
-                    label = { Text("本文") },
-                    minLines = 3,
-                    maxLines = 8,
-                    enabled = !busy,
-                    isError = editDraft.length > BackupJson.MAX_BODY,
-                    supportingText = { if (editDraft.length > BackupJson.MAX_BODY) Text("本文は10万文字までです（絵文字などは2文字）。") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    OutlinedTextField(
+                        value = editDraft,
+                        onValueChange = model::updateEditDraft,
+                        label = { Text("本文") },
+                        minLines = 3,
+                        maxLines = 8,
+                        enabled = !busy,
+                        isError = editDraft.length > BackupJson.MAX_BODY,
+                        supportingText = { if (editDraft.length > BackupJson.MAX_BODY) Text("本文は10万文字までです（絵文字などは2文字）。") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    MoodPicker(editMoodId, !busy, model::toggleEditMood, model::clearEditMood)
+                }
             },
             confirmButton = {
                 TextButton(onClick = model::edit, enabled = !busy && editDraft.isNotBlank() && editDraft.length <= BackupJson.MAX_BODY) { Text("保存") }
@@ -225,6 +233,7 @@ private fun MemonowScreen(model: PostViewModel) {
 private fun PostRow(post: Post, busy: Boolean, onEdit: () -> Unit, onDelete: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text(post.body, style = MaterialTheme.typography.bodyLarge)
+        MoodBadge(post.moodId)
         Text(
             DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
                 .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(post.createdAt)),

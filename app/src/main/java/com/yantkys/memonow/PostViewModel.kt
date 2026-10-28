@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yantkys.memonow.data.Post
+import com.yantkys.memonow.data.Mood
 import com.yantkys.memonow.data.PostRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -34,8 +35,10 @@ class PostViewModel(
     private val enrich: suspend (String) -> Unit = {},
 ) : ViewModel() {
     val draft = savedState.getStateFlow("draft", "")
+    val moodId = savedState.getStateFlow<String?>("moodId", null)
     val editingId = savedState.getStateFlow<String?>("editingId", null)
     val editDraft = savedState.getStateFlow("editDraft", "")
+    val editMoodId = savedState.getStateFlow<String?>("editMoodId", null)
     val deletingId = savedState.getStateFlow<String?>("deletingId", null)
     private val _feed = MutableStateFlow<FeedState>(FeedState.Loading)
     val feed = _feed.asStateFlow()
@@ -68,12 +71,21 @@ class PostViewModel(
     }
 
     fun updateDraft(body: String) { savedState["draft"] = body }
+    fun toggleMood(id: String) {
+        if (!blocked() && Mood.find(id) != null) savedState["moodId"] = if (moodId.value == id) null else id
+    }
+    fun clearMood() { if (!blocked()) savedState["moodId"] = null }
     fun startEditing(post: Post) {
         if (blocked()) return
         savedState["editDraft"] = post.body
+        savedState["editMoodId"] = post.moodId
         savedState["editingId"] = post.id
     }
     fun updateEditDraft(body: String) { savedState["editDraft"] = body }
+    fun toggleEditMood(id: String) {
+        if (!blocked() && Mood.find(id) != null) savedState["editMoodId"] = if (editMoodId.value == id) null else id
+    }
+    fun clearEditMood() { if (!blocked()) savedState["editMoodId"] = null }
     fun cancelEditing() { if (!_busy.value) savedState["editingId"] = null }
     fun requestDelete(id: String) { if (!blocked()) savedState["deletingId"] = id }
     fun cancelDeleting() { if (!_busy.value) savedState["deletingId"] = null }
@@ -96,11 +108,15 @@ class PostViewModel(
 
     fun send() {
         val body = draft.value
+        val mood = moodId.value
         if (body.isBlank() || blocked()) return
         val includeMetadata = canEnrich()
-        write("保存できませんでした。本文は残っています。もう一度お試しください。") {
-            val id = repository.create(body)
-            if (draft.value == body) updateDraft("")
+        write("保存できませんでした。本文と気分は残っています。もう一度お試しください。") {
+            val id = repository.create(body, mood)
+            if (draft.value == body && moodId.value == mood) {
+                updateDraft("")
+                savedState["moodId"] = null
+            }
             _sentId.value = id
             if (!includeMetadata) return@write
             // Launch a sibling job; successful body persistence never waits for metadata.
@@ -117,9 +133,10 @@ class PostViewModel(
     fun edit() {
         val id = editingId.value ?: return
         val body = editDraft.value
+        val mood = editMoodId.value
         if (body.isBlank() || blocked()) return
         write("編集を保存できませんでした。本文を確認して、もう一度お試しください。") {
-            repository.edit(id, body)
+            repository.edit(id, body, mood)
             savedState["editingId"] = null
         }
     }

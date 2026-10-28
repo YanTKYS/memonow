@@ -18,4 +18,5 @@ data class Post(
     val weatherCode: Int? = null,
     val temperatureC: Double? = null,
     val weatherAt: Long? = null,
+    val moodId: String? = null,
 )
