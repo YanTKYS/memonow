@@ -124,6 +124,21 @@ class BackupViewModelTest {
         assertFalse(paused)
     }
 
+    @Test fun replacingRecordsWhileDateFilteredReturnsToAllAndRefreshesDayCounts() = runBlocking {
+        model.refreshTimeZone(java.time.ZoneOffset.UTC)
+        val id = repository.create("元の記録","normal")
+        val initial = withTimeout(10_000) { model.feed.first { it is FeedState.Ready && it.posts.any { p -> p.id == id } } } as FeedState.Ready
+        assertTrue(model.selectDate(initial.dateCounts.keys.single()))
+        files.content = BackupDocument(2000,listOf(imported.copy(moodId="fun")))
+        model.beginBackup(false); model.importFrom(uri); confirmation(); model.confirmRestore()
+        assertTrue(result().success)
+        val ready = withTimeout(10_000) { model.feed.first { it is FeedState.Ready && it.posts.singleOrNull()?.id == imported.id } } as FeedState.Ready
+        assertNull(ready.selectedDate)
+        assertEquals(mapOf(java.time.LocalDate.of(1970,1,1) to 1),ready.dateCounts)
+        assertEquals(listOf(imported.copy(moodId="fun")),ready.visiblePosts)
+        assertEquals(imported.id,model.sentId.value)
+    }
+
     @Test fun readOrValidationFailureCannotReplaceRecords() = runBlocking {
         val id = repository.create("元の記録")
         files.failRead = true

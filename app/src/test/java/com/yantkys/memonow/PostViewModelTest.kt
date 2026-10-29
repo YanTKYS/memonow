@@ -7,6 +7,7 @@ import com.yantkys.memonow.data.Post
 import com.yantkys.memonow.data.PostDao
 import com.yantkys.memonow.data.PostRepository
 import java.io.IOException
+import java.time.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -267,6 +268,89 @@ class PostViewModelTest {
         model.retryLoading()
         runCurrent()
         assertEquals(FeedState.Ready(emptyList()), model.feed.value)
+    }
+
+    @Test fun datesRecomputeOnTimeZoneChangeAndSelectionSurvivesStateRecreation() = runTest {
+        val a = Post(id="a",body="first",createdAt=Instant.parse("2026-10-29T00:00:00Z").toEpochMilli())
+        val b = a.copy(id="b",body="second",createdAt=Instant.parse("2026-10-30T00:00:00Z").toEpochMilli())
+        dao.rows.value = listOf(a,b)
+        val day = LocalDate.of(2026,10,29)
+        val restored = PostViewModel(PostRepository(dao),SavedStateHandle(mapOf("selectedDate" to day.toString())))
+        store.put("calendar-restored",restored)
+        restored.refreshTimeZone(ZoneOffset.UTC)
+        runCurrent()
+        assertEquals(day,(restored.feed.value as FeedState.Ready).selectedDate)
+        assertEquals(listOf(a),(restored.feed.value as FeedState.Ready).visiblePosts)
+        restored.refreshTimeZone(ZoneId.of("Pacific/Honolulu"))
+        val changed = restored.feed.value as FeedState.Ready
+        assertEquals(day,changed.selectedDate)
+        assertEquals(listOf(b),changed.visiblePosts)
+        assertEquals(mapOf(day.minusDays(1) to 1,day to 1),changed.dateCounts)
+        restored.refreshTimeZone(ZoneOffset.UTC)
+        assertTrue(restored.selectDate(day.plusDays(1)))
+        restored.refreshTimeZone(ZoneId.of("Pacific/Honolulu"))
+        assertNull((restored.feed.value as FeedState.Ready).selectedDate)
+        assertEquals(listOf(a,b),(restored.feed.value as FeedState.Ready).visiblePosts)
+    }
+
+    @Test fun dayFilteringEditsAndLastDeletionUpdateCountsWithoutReaggregatingMetadataEdits() = runTest {
+        val first = Post(sequence=1,id="a",body="first",createdAt=0,moodId="fun",placeName="沖縄")
+        val second = first.copy(sequence=2,id="b",body="second",moodId="normal")
+        val next = first.copy(sequence=3,id="c",createdAt=86_400_000L)
+        dao.rows.value = listOf(first,second,next)
+        model.refreshTimeZone(ZoneOffset.UTC)
+        runCurrent()
+        val day = LocalDate.of(1970,1,1)
+        assertTrue(model.selectDate(day))
+        assertFalse(model.selectDate(day.minusDays(1)))
+        val counts = (model.feed.value as FeedState.Ready).dateCounts
+        model.startEditing(first)
+        model.updateEditDraft("編集した本文")
+        model.edit()
+        runCurrent()
+        val edited = model.feed.value as FeedState.Ready
+        assertSame(counts,edited.dateCounts)
+        assertEquals(listOf(first.copy(body="編集した本文"),second),edited.visiblePosts)
+        assertEquals(day,edited.selectedDate)
+        model.requestDelete("a"); model.delete(); runCurrent()
+        assertEquals(1,(model.feed.value as FeedState.Ready).dateCounts[day])
+        model.requestDelete("b"); model.delete(); runCurrent()
+        val all = model.feed.value as FeedState.Ready
+        assertNull(all.selectedDate)
+        assertEquals(listOf(next),all.visiblePosts)
+        assertNull(handle.get<String>("selectedDate"))
+    }
+
+    @Test fun filteredSendKeepsDateAndDraftOnFailureAndRevealsCurrentTimePostOnSuccess() = runTest {
+        val now = Instant.parse("2026-10-29T10:00:00Z")
+        val old = Post(id="old",body="過去の記録",createdAt=0)
+        dao.rows.value = listOf(old)
+        val saved = SavedStateHandle()
+        val sender = PostViewModel(PostRepository(dao,Clock.fixed(now,ZoneOffset.UTC)),saved)
+        store.put("calendar-sender",sender)
+        sender.refreshTimeZone(ZoneOffset.UTC)
+        runCurrent()
+        assertTrue(sender.selectDate(LocalDate.of(1970,1,1)))
+        sender.updateDraft("いまの記録"); sender.toggleMood("happy")
+        dao.failWrites = true
+        sender.send(); runCurrent()
+        assertEquals(LocalDate.of(1970,1,1),(sender.feed.value as FeedState.Ready).selectedDate)
+        assertEquals("いまの記録",sender.draft.value)
+        assertEquals("happy",sender.moodId.value)
+        dao.failWrites = false
+        sender.send(); runCurrent()
+        val ready = sender.feed.value as FeedState.Ready
+        assertNull(ready.selectedDate)
+        assertEquals(2,ready.visiblePosts.size)
+        val created = ready.posts.last()
+        assertEquals(now.toEpochMilli(),created.createdAt)
+        assertEquals(created.id,sender.sentId.value)
+        assertEquals("happy",created.moodId)
+        assertNull(saved.get<String>("selectedDate"))
+        assertTrue(sender.selectDate(LocalDate.of(1970,1,1)))
+        assertNull(sender.sentId.value) // Browsing cancels any unfinished follow-new-post request.
+        sender.showAllDates()
+        assertNull((sender.feed.value as FeedState.Ready).selectedDate)
     }
 
     @Test fun slowMetadataDoesNotBlockSavingOrTheNextPost() = runTest {
