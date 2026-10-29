@@ -10,8 +10,11 @@ enum class Mood(val id: String, val emoji: String, val label: String) {
     TIRED("tired", "😮‍💨", "疲れた");
 
     val display get() = "$emoji $label"
+    val accessibilityName get() = "${id.replaceFirstChar { it.uppercase() }}／$label"
 
     companion object {
+        // Selection is narrower than the persisted ID set. Keep legacy IDs readable.
+        val selectable = listOf(HAPPY, ANGRY, SAD, TIRED)
         fun find(id: String?): Mood? = entries.firstOrNull { it.id == id }
         fun isKnownOrNull(id: String?) = id == null || find(id) != null
     }

@@ -77,16 +77,18 @@ class PostViewModelTest {
         assertEquals(1, dao.rows.value.size)
     }
 
-    @Test fun allSixMoodsAreOptionalToggleableAndClearedOnlyAfterSuccess() = runTest {
+    @Test fun fourSelectableMoodsAreOptionalToggleableAndClearedOnlyAfterSuccess() = runTest {
         assertNull(model.moodId.value)
-        for (mood in com.yantkys.memonow.data.Mood.entries) {
+        for (mood in com.yantkys.memonow.data.Mood.selectable) {
             model.toggleMood(mood.id)
             assertEquals(mood.id, model.moodId.value)
             model.toggleMood(mood.id)
             assertNull(model.moodId.value)
         }
-        model.toggleMood("unknown")
-        assertNull(model.moodId.value)
+        for (id in listOf("unknown", "fun", "normal", "None", "none")) {
+            model.toggleMood(id)
+            assertNull(model.moodId.value)
+        }
         model.toggleMood("happy")
         model.toggleMood("tired")
         model.updateDraft("本文と気分")
@@ -113,15 +115,14 @@ class PostViewModelTest {
 
     @Test fun composeAndEditMoodSurviveSavedStateRecreation() = runTest {
         model.updateDraft("未送信")
-        model.toggleMood("fun")
-        val post = Post(id = "id", body = "過去の投稿", createdAt = 10, moodId = "sad")
+        model.toggleMood("happy")
+        val post = Post(id = "id", body = "過去の投稿", createdAt = 10, moodId = "normal")
         model.startEditing(post)
         model.updateEditDraft("編集途中")
-        model.toggleEditMood("normal")
         val recreated = PostViewModel(PostRepository(dao), SavedStateHandle(handle.keys().associateWith { handle.get<Any?>(it) }))
         store.put("recreated", recreated)
         assertEquals("未送信", recreated.draft.value)
-        assertEquals("fun", recreated.moodId.value)
+        assertEquals("happy", recreated.moodId.value)
         assertEquals("id", recreated.editingId.value)
         assertEquals("編集途中", recreated.editDraft.value)
         assertEquals("normal", recreated.editMoodId.value)
@@ -158,6 +159,41 @@ class PostViewModelTest {
         assertEquals(1, enrichCalls)
         assertEquals("", editor.draft.value)
         assertNull(editor.moodId.value)
+    }
+
+    @Test fun legacyMoodBodyEditsKeepEveryAttributeUntilExplicitReplacementOrRemoval() = runTest {
+        for (legacy in listOf("fun", "normal")) {
+            val original = Post(sequence = 7, id = "legacy-$legacy", body = "旧投稿", createdAt = 1000,
+                placeName = "沖縄県 糸満市", weatherCode = 0, temperatureC = 25.0, weatherAt = 1000, moodId = legacy)
+            dao.rows.value = listOf(original)
+            model.startEditing(original)
+            assertEquals(legacy, model.editMoodId.value)
+            // A removed option can't be newly selected, including while editing.
+            model.toggleEditMood(if (legacy == "fun") "normal" else "fun")
+            assertEquals(legacy, model.editMoodId.value)
+            model.updateEditDraft("本文だけ編集")
+            dao.failWrites = true
+            model.edit()
+            runCurrent()
+            assertEquals(original, dao.rows.value.single())
+            assertEquals(legacy, model.editMoodId.value)
+            dao.failWrites = false
+            model.edit()
+            runCurrent()
+            val edited = original.copy(body = "本文だけ編集")
+            assertEquals(edited, dao.rows.value.single())
+            model.startEditing(edited)
+            model.clearEditMood()
+            model.edit()
+            runCurrent()
+            assertEquals(edited.copy(moodId = null), dao.rows.value.single())
+            dao.rows.value = listOf(original)
+            model.startEditing(original)
+            model.toggleEditMood("sad")
+            model.edit()
+            runCurrent()
+            assertEquals(original.copy(moodId = "sad"), dao.rows.value.single())
+        }
     }
 
     @Test fun whitespaceOnlyCannotBeSent() = runTest {

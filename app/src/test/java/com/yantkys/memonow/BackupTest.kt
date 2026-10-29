@@ -86,6 +86,39 @@ class BackupTest {
         assertTrue(newJson.getJSONArray("posts").getJSONObject(0).isNull("moodId"))
     }
 
+    @Test fun versionThreeReopenAndJsonVersionTwoRestoreKeepLegacyIdsAndNullUnchanged() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val name = "legacy-mood-v3.db"
+        context.deleteDatabase(name)
+        fun open() = Room.databaseBuilder(context, MemonowDatabase::class.java, name).build()
+        var persistent = open()
+        val original = (listOf("happy", "fun", "angry", "sad", "normal", "tired", null)).mapIndexed { i, mood ->
+            post(i + 1L).copy(moodId = mood, placeName = "沖縄県 糸満市", weatherCode = 3, temperatureC = 25.5, weatherAt = now)
+        }
+        try {
+            persistent.posts().insertAll(original)
+            persistent.close()
+            persistent = open() // Same v3 schema, with no migration or rewrite.
+            assertEquals(3, persistent.openHelper.writableDatabase.version)
+            assertEquals(original, persistent.posts().snapshot())
+            val repo = PostRepository(persistent.posts(), clock)
+            val store = BackupStore(persistent, repo, clock)
+            for (row in original.filter { it.moodId in listOf("fun", "normal") })
+                repo.edit(row.id, "本文だけ変更", row.moodId)
+            val expected = original.map { if (it.moodId in listOf("fun", "normal")) it.copy(body = "本文だけ変更") else it }
+            val bytes = store.export().second
+            assertEquals(2, JSONObject(bytes.toString(Charsets.UTF_8)).getInt("schemaVersion"))
+            val parsed = decode(bytes)
+            assertEquals(expected, parsed.posts)
+            repo.delete(original[1].id)
+            store.restore(store.prepare(parsed))
+            assertEquals(expected, persistent.posts().snapshot())
+        } finally {
+            persistent.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     @Test fun moodSchemaVersionsRequireTheirOwnExactFieldsAndRejectInvalidIds() = runBlocking {
         val id = repository.create("維持する記録", "sad")
         val before = repository.find(id)

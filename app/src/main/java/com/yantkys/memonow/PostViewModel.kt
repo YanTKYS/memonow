@@ -72,7 +72,7 @@ class PostViewModel(
 
     fun updateDraft(body: String) { savedState["draft"] = body }
     fun toggleMood(id: String) {
-        if (!blocked() && Mood.find(id) != null) savedState["moodId"] = if (moodId.value == id) null else id
+        if (!blocked() && Mood.selectable.any { it.id == id }) savedState["moodId"] = if (moodId.value == id) null else id
     }
     fun clearMood() { if (!blocked()) savedState["moodId"] = null }
     fun startEditing(post: Post) {
@@ -83,7 +83,7 @@ class PostViewModel(
     }
     fun updateEditDraft(body: String) { savedState["editDraft"] = body }
     fun toggleEditMood(id: String) {
-        if (!blocked() && Mood.find(id) != null) savedState["editMoodId"] = if (editMoodId.value == id) null else id
+        if (!blocked() && Mood.selectable.any { it.id == id }) savedState["editMoodId"] = if (editMoodId.value == id) null else id
     }
     fun clearEditMood() { if (!blocked()) savedState["editMoodId"] = null }
     fun cancelEditing() { if (!_busy.value) savedState["editingId"] = null }
