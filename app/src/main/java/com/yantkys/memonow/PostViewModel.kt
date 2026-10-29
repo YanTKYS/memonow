@@ -12,6 +12,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.yantkys.memonow.data.Post
 import com.yantkys.memonow.data.Mood
 import com.yantkys.memonow.data.PostRepository
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,7 +22,13 @@ import kotlinx.coroutines.launch
 
 sealed interface FeedState {
     data object Loading : FeedState
-    data class Ready(val posts: List<Post>) : FeedState
+    data class Ready(
+        val posts: List<Post>,
+        val selectedDate: LocalDate? = null,
+        val dateCounts: Map<LocalDate, Int> = emptyMap(),
+        val visiblePosts: List<Post> = posts,
+        val zone: ZoneId = ZoneId.systemDefault(),
+    ) : FeedState
     data object Failed : FeedState
 }
 
@@ -40,6 +48,8 @@ class PostViewModel(
     val editDraft = savedState.getStateFlow("editDraft", "")
     val editMoodId = savedState.getStateFlow<String?>("editMoodId", null)
     val deletingId = savedState.getStateFlow<String?>("deletingId", null)
+    private var zone = ZoneId.systemDefault()
+    private var days: PostDays? = null
     private val _feed = MutableStateFlow<FeedState>(FeedState.Loading)
     val feed = _feed.asStateFlow()
     private val _busy = MutableStateFlow(false)
@@ -92,12 +102,45 @@ class PostViewModel(
     fun clearError() { _error.value = null }
     fun consumeSentId(id: String) { if (_sentId.value == id) _sentId.value = null }
 
+    fun selectDate(date: LocalDate): Boolean {
+        val ready = _feed.value as? FeedState.Ready ?: return false
+        if (blocked() || ready.dateCounts.getOrDefault(date, 0) == 0) return false
+        _sentId.value = null // Explicit browsing cancels an unfinished follow-new-post request.
+        savedState["selectedDate"] = date.toString()
+        publish(ready.posts)
+        return true
+    }
+
+    fun showAllDates() {
+        if (blocked()) return
+        clearDateFilter()
+    }
+
+    fun refreshTimeZone(newZone: ZoneId = ZoneId.systemDefault()) {
+        if (zone == newZone) return
+        zone = newZone
+        (_feed.value as? FeedState.Ready)?.let { publish(it.posts) }
+    }
+
+    private fun clearDateFilter() {
+        savedState["selectedDate"] = null
+        (_feed.value as? FeedState.Ready)?.let { publish(it.posts) }
+    }
+
+    private fun publish(posts: List<Post>) {
+        val index = days?.takeIf { it.matches(posts, zone) } ?: PostDays(posts, zone).also { days = it }
+        val selected = savedState.get<String>("selectedDate")?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+            ?.takeIf { index.counts.getOrDefault(it, 0) > 0 }
+        savedState["selectedDate"] = selected?.toString()
+        _feed.value = FeedState.Ready(posts, selected, index.counts, index.visible(posts, selected), zone)
+    }
+
     fun retryLoading() {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _feed.value = FeedState.Loading
             try {
-                repository.posts.collect { _feed.value = FeedState.Ready(it) }
+                repository.posts.collect { publish(it) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -113,6 +156,7 @@ class PostViewModel(
         val includeMetadata = canEnrich()
         write("保存できませんでした。本文と気分は残っています。もう一度お試しください。") {
             val id = repository.create(body, mood)
+            clearDateFilter() // Always save at the repository's current time, then reveal the new post.
             if (draft.value == body && moodId.value == mood) {
                 updateDraft("")
                 savedState["moodId"] = null
@@ -184,6 +228,7 @@ class PostViewModel(
         cancelMetadata()
         backupOperation("記録を置き換えています…", "replace") {
             checkNotNull(backupStore).restore(plan)
+            clearDateFilter() // A full replacement returns to the complete restored timeline.
             savedState["editingId"] = null
             savedState["deletingId"] = null
             retryLoading()

@@ -1,6 +1,13 @@
 package com.yantkys.memonow
 
 import android.os.Bundle
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.yantkys.memonow.backup.BackupState
 import com.yantkys.memonow.backup.BackupJson
 import com.yantkys.memonow.backup.backupCapacityWarning
@@ -10,7 +17,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,12 +24,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -33,7 +35,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,17 +46,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.compose.ui.platform.LocalContext
-import com.yantkys.memonow.metadata.weatherLabel
-import com.yantkys.memonow.data.Post
-import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 
 class MainActivity : ComponentActivity() {
     private val model by lazy { ViewModelProvider(this, PostViewModel.Factory)[PostViewModel::class.java] }
+    private val zoneReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val zone = intent.getStringExtra("time-zone")?.let { runCatching { ZoneId.of(it) }.getOrNull() }
+                ?: ZoneId.systemDefault()
+            model.refreshTimeZone(zone)
+        }
+    }
     override fun onStart() {
         super.onStart()
+        model.refreshTimeZone()
+        ContextCompat.registerReceiver(this, zoneReceiver, IntentFilter(Intent.ACTION_TIMEZONE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         val app = application as MemonowApplication
         app.screenStarted()
         if (!app.locationSource.hasPermission()) {
@@ -64,6 +69,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onStop() {
+        unregisterReceiver(zoneReceiver)
         if ((application as MemonowApplication).screenStopped()) model.cancelMetadata()
         super.onStop()
     }
@@ -82,6 +88,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MemonowScreen(model: PostViewModel) {
     val app = LocalContext.current.applicationContext as MemonowApplication
+    var showCalendar by rememberSaveable { mutableStateOf(false) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showBackup by rememberSaveable { mutableStateOf(false) }
     val backup by model.backupState.collectAsStateWithLifecycle()
@@ -96,32 +105,15 @@ private fun MemonowScreen(model: PostViewModel) {
     val editDraft by model.editDraft.collectAsStateWithLifecycle()
     val editMoodId by model.editMoodId.collectAsStateWithLifecycle()
     val deletingId by model.deletingId.collectAsStateWithLifecycle()
-    val listState = rememberLazyListState()
-    var initiallyPositioned by rememberSaveable { mutableStateOf(false) }
     val posts = (feed as? FeedState.Ready)?.posts
     val capacityWarning = remember(posts) { posts?.let(::backupCapacityWarning) }
-
-    LaunchedEffect(posts, sentId) {
-        if (posts != null) {
-            val sentIndex = posts.indexOfFirst { it.id == sentId }
-            if (sentIndex >= 0) {
-                listState.animateScrollToItem(sentIndex)
-                sentId?.let(model::consumeSentId)
-                initiallyPositioned = true
-            } else if (!initiallyPositioned) {
-                if (posts.isNotEmpty()) listState.scrollToItem(posts.lastIndex)
-                initiallyPositioned = true
-            }
-            // Editing, deletion and unrelated DB emissions never trigger scrolling.
-            // Stable UUID keys retain the visible anchor while reading old entries.
-        }
-    }
 
     Scaffold(
         topBar = {
             TopAppBar(title = { Text("memonow") }, actions = {
-                TextButton(onClick = { showBackup = true }, enabled = !writing) { Text("バックアップ") }
-                TextButton(onClick = { showSettings = true }, enabled = !busy) { Text("設定") }
+                AppActions(calendarEnabled = !busy && feed is FeedState.Ready, writing = writing, busy = busy,
+                    onCalendar = { focus.clearFocus(); keyboard?.hide(); showCalendar = true },
+                    onBackup = { showBackup = true }, onSettings = { showSettings = true })
             })
         },
         bottomBar = {
@@ -154,28 +146,14 @@ private fun MemonowScreen(model: PostViewModel) {
             }
         },
     ) { contentPadding ->
-        Box(Modifier.fillMaxSize().padding(contentPadding)) {
-            when (val state = feed) {
-                FeedState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                FeedState.Failed -> Column(Modifier.align(Alignment.Center).padding(24.dp)) {
-                    Text("履歴を読み込めませんでした。")
-                    TextButton(onClick = model::retryLoading) { Text("再試行") }
-                }
-                is FeedState.Ready -> {
-                    if (state.posts.isEmpty()) {
-                        Text("まだ記録はありません。\nいまの一文から始めましょう。", Modifier.align(Alignment.Center).padding(24.dp))
-                    }
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(state.posts, key = { it.id }) { post ->
-                            PostRow(post, busy, { model.startEditing(post) }, { model.requestDelete(post.id) })
-                        }
-                    }
-                }
-            }
-        }
+        PostTimeline(feed, sentId, busy, model::consumeSentId, model::showAllDates, model::retryLoading,
+            model::startEditing, { model.requestDelete(it.id) }, Modifier.fillMaxSize().padding(contentPadding))
+    }
+
+    val ready = feed as? FeedState.Ready
+    if (showCalendar && ready != null) {
+        CalendarDialog(ready.dateCounts, ready.selectedDate, ready.zone,
+            onSelect = { if (model.selectDate(it)) showCalendar = false }, onDismiss = { showCalendar = false })
     }
 
     if (showBackup || backup != BackupState.Idle) {
@@ -226,32 +204,5 @@ private fun MemonowScreen(model: PostViewModel) {
             text = { Text(error.orEmpty()) },
             confirmButton = { TextButton(onClick = model::clearError) { Text("閉じる") } },
         )
-    }
-}
-
-@Composable
-private fun PostRow(post: Post, busy: Boolean, onEdit: () -> Unit, onDelete: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Text(post.body, style = MaterialTheme.typography.bodyLarge)
-        MoodBadge(post.moodId)
-        Text(
-            DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM)
-                .withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(post.createdAt)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        val attributes = listOfNotNull(
-            post.placeName?.let { "📍$it" },
-            weatherLabel(post.weatherCode),
-            post.temperatureC?.let { String.format(java.util.Locale.getDefault(), "%.1f°C", it) },
-        )
-        if (attributes.isNotEmpty()) {
-            Text(attributes.joinToString(" · "), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Row {
-            TextButton(onClick = onEdit, enabled = !busy) { Text("編集") }
-            TextButton(onClick = onDelete, enabled = !busy) { Text("削除") }
-        }
     }
 }
