@@ -63,7 +63,19 @@ debug版や別の署名から切り替える場合は、[データ移行](docs/b
 **Weather data by [Open-Meteo.com](https://open-meteo.com/)**、[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
 天気は投稿時刻に近いモデルの推定値です。
 無料APIは非商用利用向けで、商用利用等は提供元の条件を再確認してください。
+アプリのMITライセンスは、この天気データや外部APIの利用許可を変更しません。
 [利用条件・送信項目の詳細](docs/location-weather.md)も確認してください。
+
+## ライセンス
+
+memonowの自作部分（ソースコード・ドキュメント・アプリアイコン）は[MIT License](LICENSE)（Copyright (c) 2026 YanTKYS）で提供します。
+次のものはMITの対象外で、それぞれの元の条件に従います。詳細は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。
+
+- 依存ライブラリ（AndroidX・Jetpack Compose・Room・apksig・Kotlin等はApache License 2.0）とGradle Wrapper等の第三者ファイル
+- Open-Meteoの天気データ（CC BY 4.0）。MITは天気データや外部APIの利用許可・条件を変更しません
+- ユーザーが投稿した記録・バックアップJSON、署名鍵（プライバシー・署名・更新手順は従来どおりです）
+
+配布するAPKには、上記のライセンス全文と通知（`assets/licenses/`）を同梱しています。
 
 ## 詳しいドキュメント
 

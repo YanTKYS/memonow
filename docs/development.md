@@ -103,3 +103,16 @@ adb shell am start -n com.yantkys.memonow/.MainActivity
 ```
 
 手動の確認項目は[テストガイド](testing.md)を参照してください。APKをファイル転送して開く場合は、そのファイル管理アプリからの「不明なアプリのインストール」を一時的に許可します。
+
+## ライセンス表記の維持
+
+ルートの `LICENSE` と `THIRD_PARTY_NOTICES.md` が正本です。
+APKへ同梱するため、同じ内容を `app/src/main/assets/licenses/` にも置いています。
+どちらかを更新したら、次で両方を揃えてください。
+
+```sh
+cp LICENSE app/src/main/assets/licenses/LICENSE
+cp THIRD_PARTY_NOTICES.md app/src/main/assets/licenses/THIRD_PARTY_NOTICES.md
+```
+
+実行時の依存を追加・変更したときは `THIRD_PARTY_NOTICES.md` の一覧とライセンスを確認します。

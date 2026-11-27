@@ -48,6 +48,7 @@ HTTP 429/5xx、位置や地名の一時失敗などを有限再試行の対象�
 
 **Weather data by [Open-Meteo.com](https://open-meteo.com/)** — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
 WMO天気コードを簡潔な日本語に変換して表示します。アプリの設定画面にも出典とライセンスの導線があります。
+アプリのMITライセンス（[LICENSE](../LICENSE)）は天気データ・Open-Meteo APIの利用許可や条件を変更しません。上記の出典表示・利用条件が引き続き適用されます。
 
 利用APIはHTTPSの [`/v1/forecast`](https://open-meteo.com/en/docs) です。
 送信するのは丸めた座標と `current=temperature_2m,weather_code`、摂氏・UTC epoch秒の指定だけです。
